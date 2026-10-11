@@ -11,3 +11,4 @@ xrc_patch_manifest.json
 ios/
 ui-mock/_*.m
 ui-mock/_*.tmp
+.claude/

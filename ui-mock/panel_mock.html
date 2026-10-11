@@ -1,314 +1,490 @@
 <!doctype html>
 <!--
-  练习面板 · UI 语义预览稿 v3
+  练习面板 · 设计稿 v4（Arcaea 原生风格）
   © 雾月星辰&MLXC/github@XingChenRS
+  ——
+  形态：全屏模态。悬浮球点开 → 对局暂停（谱面钟冻结 + BGM 暂停 + 全屏吞触摸）
+        → 暗化 49% 渐入 + 面板入场（≈0.35s）→ 关闭即原路恢复。
+        非对局场景（选曲/结算）不触发暂停，控件照常可用。
+  背景：半透明。全屏暗化层（pause_background_shadow）+ 面板玻璃（pause_backing 九宫格）。
+  字体：L2（界面文案）/ Exo（数值时间）/ GeosansLight（倍速大数字）；中文 NotoSansCJKsc。
+  尺度：以 1280 设计宽为基准，屏上 pt = 设计值 × 屏宽pt ÷ 1280。
+  素材：全部引用包内原文件（layouts/…、img/…、Fonts/…）；预览时相对路径指向本地包，缺失则按字体栈/底色回退；实现时同路径从 mainBundle 读取。
+  ——
   结构：
-    · 标题栏含版本号；面板底部含版权行；诊断区只读状态压缩为两行
-    · 播放：时间轴全长展示播放进度；「回跳重播」为单一开关
-    · 循环：设 A/B + 开关 + 重置　｜　判定窗口：四档 + 「自动演奏」
-    · 网络：私服地址折叠展示，展开可编辑
-    · 「开发」分区（日志档位、转储、探针、强发、观测桩）随开发构建提供；
-      发布构建为最小日志面
-    · 悬浮球：图标 + 球底构建号；单击/长按/拖拽三手势
-  与 ObjC 实现共用 metric：pad 12 / gap 8 / rowH 30 / 圆角 6；标题栏固定，内容区可滚动（上限 72% 屏高）。
-  语义规则：
-    · 开关类 =「名称 + 状态点」：开=彩色填充+实心点，关=深灰+空心点
-    · 动作类 = 深灰底白字，无状态点；破坏性动作 = 深灰底红字、靠右、字号小
-    · 开发构建专属控件 =「开发」标记并置于虚线分区内
-    · 状态数字集中在「网络/诊断」的只读行里，不塞进按钮标题
-    · 每个分区一行小标题（左=名称，右=一句话说明）；长按任一项 = 查看该项说明
+    · 标头：PRACTICE＋版本戳｜右：说明(ⓘ) / 关闭(✕)
+    · 时间轴区（全宽、常驻、面板之核心）：
+        密度条波形（谱面音符密度直方图）＋ 已播亮带 ＋ 循环区间带（A/B 菱形手柄，可直接拖动改区间）
+        ＋ 发光播放头；下方 当前时间 / 循环区间值 / 总时长；两端 ∓5s 菱形步进
+    · 主区：左＝速度列（GeosansLight 大数字＋‹ › 箭头／音乐变速／回跳重播）
+            右＝分区页签（循环·判定·解锁·网络·存储·诊断）＋ 可滚动内容
+    · 底栏：继续（主按钮）｜复位循环（次按钮）｜版权行
+  语义（保持 v3 语义，样式原生化）：
+    · 开关类＝行内点按切换，状态词呈现（已开亮白 / 已关暗紫灰）；动作类＝行式按钮；
+      破坏性＝红字行；状态数字只进只读暗行；数值调节＝菱形 ± 步进器
+    · ⓘ＝说明模式（各分区追加说明行）；长按任一行＝查看该行说明
+    · 页签＝六分区；内容超高滚动。全屏化后取消浮窗拖动与位置记忆。
 -->
 <html lang="zh">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>xrcdemo · 面板预览 v3</title>
+<title>xrcdemo · 练习面板设计稿 v4</title>
 <style>
+  /* ── 游戏内字体（相对路径指向本地包；缺失时按栈回退） ── */
+  @font-face{font-family:'Exo-Light';   src:url('../../../../incoming/arcaea-7.0/ios/Payload/Arc-mobile.app/Fonts/Exo-Light.ttf')}
+  @font-face{font-family:'Exo-Regular'; src:url('../../../../incoming/arcaea-7.0/ios/Payload/Arc-mobile.app/Fonts/Exo-Regular.ttf')}
+  @font-face{font-family:'Exo-Medium';  src:url('../../../../incoming/arcaea-7.0/ios/Payload/Arc-mobile.app/Fonts/Exo-Medium.ttf')}
+  @font-face{font-family:'Exo-SemiBold';src:url('../../../../incoming/arcaea-7.0/ios/Payload/Arc-mobile.app/Fonts/Exo-SemiBold.ttf')}
+  @font-face{font-family:'L2-Regular';  src:url('../../../../incoming/arcaea-7.0/ios/Payload/Arc-mobile.app/Fonts/L2-Regular.ttf')}
+  @font-face{font-family:'L2-Semibold'; src:url('../../../../incoming/arcaea-7.0/ios/Payload/Arc-mobile.app/Fonts/L2-Semibold.ttf')}
+  @font-face{font-family:'Geosans';     src:url('../../../../incoming/arcaea-7.0/ios/Payload/Arc-mobile.app/Fonts/GeosansLight.ttf')}
+  @font-face{font-family:'NotoSC';      src:url('../../../../incoming/arcaea-7.0/ios/Payload/Arc-mobile.app/Fonts/NotoSansCJKsc-Regular.otf')}
+  @font-face{font-family:'NotoSC-Light';src:url('../../../../incoming/arcaea-7.0/ios/Payload/Arc-mobile.app/Fonts/NotoSansCJKsc-Light.otf')}
+
   :root{
-    --pad:12px; --gap:8px; --row:30px; --panel:rgba(13,13,13,.94);
-    --card:#1a1a1a; --line:rgba(255,255,255,.05);
-    --btn:#3a3a3a; --net:#0f7a7a; --on:#99215c; --txt:#fff; --dim:#9a9a9a; --dim2:#6f6f6f;
-    --accent:#2ea3a3; --accent-soft:#9fe3e3; --danger:#e06666; --ok:#7fd6a1;
+    --app:'../../../../incoming/arcaea-7.0/ios/Payload/Arc-mobile.app';
+    --txt:#fff;
+    --dim:rgba(206,198,224,.74);
+    --dim2:rgba(190,182,208,.52);
+    --lav:#d7cdec;            /* 数值/取值 淡紫 */
+    --danger:#d98a8a;         /* 破坏性 红 */
+    --state-off:rgba(168,158,186,.92);
+    --row-press:rgba(255,255,255,.07);
+    --accent-band:rgba(126,100,172,.40);
+    --accent-edge:rgba(196,178,232,.65);
+    --deco:#8fc3c3;           /* 「开发」标记色 */
   }
-  *{box-sizing:border-box;-webkit-user-select:none;user-select:none}
-  body{margin:0;background:#161616;font:13px -apple-system,"SF Pro Text","PingFang SC",sans-serif;color:var(--txt)}
-  /* ── 预览页外壳（非产品 UI） ── */
-  .pagehead{display:flex;align-items:center;justify-content:center;gap:12px;padding:14px 0 0;flex-wrap:wrap}
-  .pagehead .cap{font-size:11px;color:var(--dim2)}
-  .seg{display:flex;background:#2c2c2c;border-radius:6px;overflow:hidden}
-  .seg .opt{min-width:64px;height:26px;display:flex;align-items:center;justify-content:center;
-            font-size:11px;color:var(--dim);cursor:pointer;padding:0 10px}
-  .seg .opt.sel{background:#4a4a4a;color:#fff}
-  .stage{display:flex;gap:22px;justify-content:center;align-items:flex-start;flex-wrap:wrap;padding:16px 12px 28px}
-  /* ── 手机壳 ── */
-  .phone{width:460px;max-width:96vw;background:#232323;border-radius:28px;padding:10px}
-  .panel{background:var(--panel);border-radius:12px;overflow:hidden;display:flex;flex-direction:column;max-height:620px}
-  .titlebar{display:flex;align-items:center;height:34px;padding:0 10px;flex:0 0 auto;background:#191919}
-  .titlebar .t{flex:1;font-weight:600;font-size:15px}
-  .titlebar .t .ver{font-size:11px;font-weight:500;color:#8a8a8a;font-family:ui-monospace,Menlo,monospace;margin-left:6px;vertical-align:1px}
-  .titlebar .info{width:26px;height:26px;line-height:24px;text-align:center;border-radius:6px;color:#8fd3d3;font-size:14px;margin-right:4px}
-  .titlebar .x{width:26px;height:26px;line-height:24px;text-align:center;border-radius:6px;color:#cfcfcf;font-size:14px}
-  .body{overflow-y:auto;padding:8px var(--pad) var(--pad);flex:1 1 auto}
-  /* ── 分区与卡片 ── */
-  .sec{margin-top:10px;display:flex;align-items:center;gap:6px}
-  .sec:first-child{margin-top:2px}
-  .sec .lbl{font-size:10px;letter-spacing:.08em;color:var(--dim);text-transform:uppercase}
-  .sec .hint{font-size:10px;color:var(--dim2);margin-left:auto;text-align:right}
-  .sec .act{margin-left:auto}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px;margin-top:6px}
-  .row{display:flex;align-items:center;gap:var(--gap)}
-  .row+.row{margin-top:var(--gap)}
-  .cardsep{border-top:1px solid var(--line);margin:8px 0}
-  /* ── 控件 ── */
-  .btn{height:var(--row);border-radius:6px;background:var(--btn);display:flex;align-items:center;
-       justify-content:center;font-size:13px;font-weight:500;white-space:nowrap;cursor:pointer}
-  .btn.sm{height:26px;font-size:11px;padding:0 10px;flex:0 0 auto}
-  .btn.danger{background:#3a2a2a;color:var(--danger)}
-  .sw{display:flex;align-items:center;justify-content:space-between;padding:0 10px;cursor:pointer;
-      height:var(--row);border-radius:6px;background:#2c2c2c;font-size:12px;color:var(--dim);transition:background .12s,color .12s}
-  .sw .nm{display:flex;align-items:center;gap:5px}
-  .sw .dot{width:8px;height:8px;border-radius:50%;border:1.5px solid var(--dim);flex:0 0 auto}
-  .sw.on{background:var(--on);color:#fff}
-  .sw.on .dot{background:#fff;border-color:#fff}
-  .sw.net.on{background:var(--net)}
-  .badge{display:inline-block;font-size:9px;line-height:14px;padding:0 5px;border-radius:3px;vertical-align:1px}
-  .badge.dev{background:rgba(46,163,163,.14);color:var(--accent);border:1px solid rgba(46,163,163,.36)}
-  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:var(--gap)}
-  .track{position:relative;height:34px;background:#111;border-radius:6px}
-  .track .fill{position:absolute;left:0;top:0;bottom:0;width:38%;background:rgba(46,163,163,.25);border-radius:6px 0 0 6px}
-  .track .knob{position:absolute;top:-2px;left:38%;width:3px;height:38px;background:#eee;border-radius:2px}
-  .track .ab{position:absolute;top:7px;height:20px;border-top:2px solid var(--accent);border-bottom:2px solid var(--accent)}
-  .track .ab.a{left:26%;border-left:2px solid var(--accent)}
-  .track .ab.b{left:70%;border-right:2px solid var(--accent)}
-  .mono{font-variant-numeric:tabular-nums;font-family:ui-monospace,Menlo,monospace}
-  .slider{flex:1;height:var(--row);display:flex;align-items:center}
-  .slider .rail{flex:1;height:4px;border-radius:2px;background:#4a4a4a;position:relative}
-  .slider .rail .fill{position:absolute;left:0;top:0;bottom:0;width:37%;background:#ddd;border-radius:2px}
-  .slider .rail .k{position:absolute;top:-6px;left:37%;width:16px;height:16px;border-radius:50%;background:#fff}
-  .speed{width:56px;font-size:14px;font-weight:600}
-  .field{flex:1;height:26px;border-radius:6px;background:#2c2c2c;color:#e8e8e8;font-size:11px;
-         display:flex;align-items:center;padding:0 8px;font-family:ui-monospace,Menlo,monospace;overflow:hidden;white-space:nowrap}
-  .cell{display:flex;flex-direction:column;gap:3px}
-  .cell .k{font-size:9px;color:var(--dim)}
-  .cell .v{height:26px;border-radius:6px;background:#2c2c2c;display:flex;align-items:center;justify-content:center;
-           font-family:ui-monospace,Menlo,monospace;font-size:12px}
-  .diag{font-size:10px;color:#8a8a8a;line-height:1.6}
-  .tag{display:inline-block;padding:0 4px;border-radius:3px;background:#2c2c2c;color:#bbb;margin-right:4px}
-  .ok{color:var(--ok)}
-  .note{font-size:10px;line-height:1.6;color:#8f8f8f;margin-top:6px}
-  .note b{color:#c9c9c9;font-weight:600}
-  /* ── 折叠（地址 / 高级） ── */
-  details.fold summary{list-style:none;height:26px;display:flex;align-items:center;gap:6px;
-      font-size:11px;color:var(--dim);cursor:pointer;padding:0 8px;border-radius:6px;background:#232323}
-  details.fold summary::-webkit-details-marker{display:none}
-  details.fold summary .car{transition:transform .12s}
-  details.fold[open] summary .car{transform:rotate(90deg)}
-  details.fold .in{margin-top:6px;display:flex;flex-direction:column;gap:var(--gap)}
-  /* ── 开发构建专属区 ── */
-  .dbg{margin-top:10px;border-top:1px dashed rgba(255,255,255,.10);padding-top:8px}
-  body.release .dbg{display:none}
-  /* ── 侧栏（图例 / 悬浮球） ── */
-  .side{width:288px;display:flex;flex-direction:column;gap:12px}
-  .side .card{margin-top:0}
-  .legend{display:flex;align-items:center;gap:8px;margin-top:8px}
-  .legend .lab{font-size:10px;color:var(--dim2);width:74px;flex:0 0 auto}
-  .ballonly{display:flex;justify-content:center;padding:6px 0}
-  .ball{width:56px;height:56px;border-radius:50%;overflow:hidden;position:relative;flex:0 0 auto;
-        box-shadow:0 4px 14px rgba(0,0,0,.5)}
-  .ball img{width:100%;height:100%;object-fit:cover;display:block}
-  .ball .stamp{position:absolute;left:0;right:0;bottom:0;height:13px;line-height:13px;text-align:center;
-        background:rgba(0,0,0,.5);color:#fff;font:700 8px ui-monospace,Menlo,monospace}
-  .side .note{margin-top:8px}
-  .copy{font-size:10px;color:#5f5f5f;text-align:center;margin-top:10px;letter-spacing:.04em}
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-user-select:none;user-select:none}
+  html,body{background:#101016;color:var(--txt);
+    font:13px 'NotoSC',-apple-system,'PingFang SC',sans-serif}
+  .stage{display:flex;flex-direction:column;align-items:center;gap:14px;padding:20px 12px 30px}
+  .cap{font-size:11px;color:#6e6a7c}
+  .seg{display:flex;background:#2b2736;border-radius:8px;overflow:hidden}
+  .seg .opt{min-width:76px;height:26px;display:flex;align-items:center;justify-content:center;
+    font-size:11px;color:#9a94aa;cursor:pointer;padding:0 12px}
+  .seg .opt.sel{background:#4b4459;color:#fff}
+
+  /* ── 手机壳（横屏 852×393） ── */
+  .phone{position:relative;width:852px;height:393px;border-radius:30px;overflow:hidden;
+    box-shadow:0 18px 50px rgba(0,0,0,.55);flex:0 0 auto}
+  /* 模拟对局画面（设计稿衬底，非产品元素） */
+  .scene{position:absolute;inset:0;background:
+    radial-gradient(620px 340px at 22% 18%, rgba(178,158,232,.55), rgba(178,158,232,0) 62%),
+    radial-gradient(520px 300px at 82% 88%, rgba(96,74,140,.5), rgba(96,74,140,0) 60%),
+    linear-gradient(158deg,#4a3e68 0%,#2a2038 46%,#141020 100%)}
+  .scene i{position:absolute;background:rgba(255,255,255,.05);border-radius:2px}
+  /* 暗化层：pause_background_shadow 全屏拉伸（自身 49% 暗紫、四角渐隐） */
+  .dim{position:absolute;inset:-6%;
+    background:url('../../../../incoming/arcaea-7.0/ios/Payload/Arc-mobile.app/layouts/1080/pause/pause_background_shadow.png') center/100% 100% no-repeat}
+
+  /* ── 面板（pause_backing 九宫格：slice 22/87，边框宽=切片÷1.5） ── */
+  .panel{position:absolute;inset:10px;border-width:12px 48px;border-style:solid;border-color:transparent;border-radius:20px;
+    border-image:url('../../../../incoming/arcaea-7.0/ios/Payload/Arc-mobile.app/layouts/1080/pause/pause_backing.png') 22 87 22 87 fill stretch;
+    background:rgba(37,23,42,.42); /* 素材缺失时的玻璃回退 */
+    display:flex;flex-direction:column;padding:2px 26px 10px}
+
+  /* 标头 */
+  .hdr{display:flex;align-items:center;height:32px;flex:0 0 auto}
+  .hdr .t{font:300 28px 'Exo-Light',system-ui;letter-spacing:.06em}
+  .hdr .ver{font:12px 'Exo-Regular',monospace;color:var(--dim2);margin-left:10px;letter-spacing:.02em}
+  .hdr .sp{flex:1}
+  .hdr .ic{width:30px;height:30px;margin-left:8px;cursor:pointer;opacity:.92;
+    display:flex;align-items:center;justify-content:center}
+  .hdr .ic:hover{opacity:1}
+  .hdr .ic.info{background:url('../../../../incoming/arcaea-7.0/ios/Payload/Arc-mobile.app/layouts/mainmenu/help_button.png') center/24px 24px no-repeat}
+  .hdr .ic.close .xglyph{font:20px 'L2-Regular',system-ui;color:#f0edf6}
+
+  /* ── 时间轴区 ── */
+  .tl{flex:0 0 auto;padding:2px 0 0}
+  .tlrow{display:flex;align-items:center;gap:12px}
+  .dstep{width:34px;height:34px;flex:0 0 auto;cursor:pointer;
+    background:url('../../../../incoming/arcaea-7.0/ios/Payload/Arc-mobile.app/layouts/songselect/settings_stepper.png') center/contain no-repeat;
+    display:flex;align-items:center;justify-content:center;
+    font:600 20px 'Exo-SemiBold';color:#fff;padding-bottom:1px}
+  .dstep:active{filter:brightness(1.25)}
+  .stripwrap{flex:1;position:relative;height:42px;cursor:pointer}
+  .wave{position:absolute;inset:0;display:flex;align-items:center;gap:2px;overflow:hidden;border-radius:6px}
+  .wave i{flex:0 0 2px;background:rgba(255,255,255,.24);border-radius:1px;height:30%}
+  .wave i.on{background:rgba(255,255,255,.78)}
+  .wave i.loop{background:rgba(214,199,246,.62)}
+  .band{position:absolute;top:0;bottom:0;background:var(--accent-band);
+    border-top:1px solid var(--accent-edge);border-bottom:1px solid var(--accent-edge);
+    border-radius:3px;pointer-events:none}
+  .band.off{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.28)}
+  .hA,.hB{position:absolute;top:50%;width:27px;height:27px;margin:-13.5px 0 0 -13.5px;cursor:ew-resize;z-index:3;
+    background:url('../../../../incoming/arcaea-7.0/ios/Payload/Arc-mobile.app/layouts/songselect/settings_stepper.png') center/contain no-repeat;
+    display:flex;align-items:center;justify-content:center;font:600 11px 'L2-Semibold';color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.7)}
+  .hA::after{content:'A'} .hB::after{content:'B'}
+  .band.off ~ .hA,.band.off ~ .hB{opacity:.55}
+  .head{position:absolute;top:-2px;bottom:-2px;width:2px;background:#fff;box-shadow:0 0 7px rgba(255,255,255,.9);z-index:2}
+  .head .dot{position:absolute;left:50%;top:50%;width:26px;height:26px;transform:translate(-50%,-50%);
+    background:url('../../../../incoming/arcaea-7.0/ios/Payload/Arc-mobile.app/layouts/ingame/progress_glow.png') center/contain no-repeat}
+  .tlmeta{display:flex;align-items:baseline;gap:10px;margin-top:2px;padding:0 44px}
+  .tcur{font:17px 'Exo-Regular',monospace}
+  .ttot{font:17px 'Exo-Regular',monospace;color:var(--dim2)}
+  .tlmeta .mid{flex:1;text-align:center;font:12.5px 'Exo-Regular',monospace;color:var(--lav);letter-spacing:.03em}
+  .tlmeta .mid b{font-family:'L2-Semibold';font-weight:600;margin:0 3px;color:#e8dffa}
+
+  /* ── 主区 ── */
+  .main{flex:1 1 auto;display:flex;gap:20px;min-height:0;margin-top:3px}
+  /* 速度列 */
+  .speedcol{flex:0 0 178px;display:flex;flex-direction:column;gap:7px;overflow:hidden}
+  .speedhero{display:flex;align-items:center;justify-content:space-between;flex:0 0 auto;height:62px}
+  .chev{width:30px;height:44px;flex:0 0 auto;cursor:pointer;
+    background:url('../../../../incoming/arcaea-7.0/ios/Payload/Arc-mobile.app/layouts/mainmenu/arrow_left.png') center/contain no-repeat}
+  .chev.r{transform:scaleX(-1)}
+  .chev:active{filter:brightness(1.35)}
+  .speednum{flex:1;text-align:center;font:56px 'Geosans',system-ui;line-height:1;padding-bottom:4px}
+  .speedlbl{text-align:center;font:11px 'NotoSC';color:var(--dim2);margin-top:-4px}
+  /* 行控件（开关＝名称+状态词） */
+  .rowc{display:flex;align-items:center;height:33px;padding:0 11px;border-radius:8px;cursor:pointer;
+    font:15px 'NotoSC';gap:8px}
+  .rowc:active{background:var(--row-press)}
+  .rowc .nm{flex:1;color:#f4f1fa}
+  .rowc .st{font:15px 'NotoSC';color:var(--state-off)}
+  .rowc.on .st{color:#fff}
+  .rowc .val{font:15px 'Exo-Regular',monospace;color:var(--lav)}
+  .pane .rowc{height:32px}
+  .rowc.danger .nm{color:var(--danger);text-align:right}
+  .rowc .chevmark{color:var(--dim2);font-size:12px}
+  /* 步进器行 */
+  .steps{display:flex;align-items:center;gap:9px}
+  .steps .dstep{width:26px;height:26px;font-size:15px}
+  .steps .val{min-width:56px;text-align:center;font:16px 'Exo-Medium',monospace;color:#fff}
+  /* 页签区 */
+  .tabsarea{flex:1 1 auto;display:flex;flex-direction:column;min-width:0}
+  .tabstrip{flex:0 0 auto;height:31px;border-radius:9px;overflow:hidden;position:relative;
+    background:url('../../../../incoming/arcaea-7.0/ios/Payload/Arc-mobile.app/img/dialog_v2/tabs_background.png') center/100% 100% no-repeat;
+    display:flex}
+  .tab{flex:1;display:flex;align-items:center;justify-content:center;cursor:pointer;
+    font:600 13.5px 'L2-Semibold',system-ui;letter-spacing:.05em;color:rgba(226,218,242,.62)}
+  .tab.sel{color:#fff;
+    background:url('../../../../incoming/arcaea-7.0/ios/Payload/Arc-mobile.app/img/dialog_v2/tabs_selected.png') center/100% 100% no-repeat}
+  .panehint{flex:0 0 auto;font:11.5px 'NotoSC-Light';color:var(--dim2);padding:3px 2px 2px}
+  .panes{flex:1 1 auto;overflow-y:auto;min-height:0;padding:2px 2px 4px}
+  .panes::-webkit-scrollbar{width:3px}
+  .panes::-webkit-scrollbar-thumb{background:rgba(255,255,255,.16);border-radius:2px}
+  .pane{display:none;flex-direction:column;gap:2px}
+  .pane.sel{display:flex}
+  .hintline{font:11.5px 'NotoSC-Light';color:var(--dim2);line-height:1.65;padding:4px 2px;display:none}
+  body.info .hintline{display:block}
+  .stat{font:11.5px 'NotoSC-Light';color:rgba(202,194,220,.72);line-height:1.7;padding:4px 2px;font-variant-numeric:tabular-nums}
+  .stat .ok{color:#a9dcb9}
+  .chips{display:flex;gap:6px;padding:5px 0 3px}
+  .chip{font:11px 'NotoSC';color:rgba(226,220,240,.85);border:1px solid rgba(255,255,255,.26);
+    border-radius:4px;padding:1px 7px;line-height:16px}
+  /* 分段（日志档位） */
+  .segrow{display:flex;align-items:center;gap:10px;height:36px;padding:0 2px}
+  .segrow .nm{font:15px 'NotoSC';color:#f4f1fa;flex:0 0 auto}
+  .segc{flex:1;display:flex;height:26px;border-radius:7px;overflow:hidden;
+    background:url('../../../../incoming/arcaea-7.0/ios/Payload/Arc-mobile.app/img/dialog_v2/tabs_background.png') center/100% 100% no-repeat}
+  .segc .o{flex:1;display:flex;align-items:center;justify-content:center;cursor:pointer;
+    font:12px 'NotoSC';color:rgba(226,218,242,.62)}
+  .segc .o.sel{color:#fff;background:url('../../../../incoming/arcaea-7.0/ios/Payload/Arc-mobile.app/img/dialog_v2/tabs_selected.png') center/100% 100% no-repeat}
+  /* 应用按钮（button.png 九宫格） */
+  .bwrap{border-width:7px 10px;border-style:solid;border-color:transparent;
+    border-image:url('../../../../incoming/arcaea-7.0/ios/Payload/Arc-mobile.app/layouts/1080/pause/button.png') 11 15 11 15 fill stretch;
+    height:40px;display:flex;align-items:center;justify-content:center;cursor:pointer;margin:5px 0 3px}
+  .bwrap:active{filter:brightness(1.18)}
+  .bwrap .lb{font:14px 'NotoSC';color:#fff}
+  /* 开发块 */
+  .dev{margin-top:6px;border-top:1px dashed rgba(255,255,255,.14);padding-top:7px}
+  body.release .dev{display:none}
+  .devhead{display:flex;align-items:center;gap:8px;font:11px 'NotoSC-Light';color:var(--dim2);padding:1px 2px 5px}
+  .badge{font:10px 'NotoSC';color:var(--deco);border:1px solid rgba(143,195,195,.42);
+    border-radius:4px;padding:0 6px;line-height:15px}
+  .devgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:2px 0}
+  .devgrid .bwrap{margin:0;height:38px}
+  .devgrid .bwrap .lb{font-size:13px}
+
+  /* ── 底栏 ── */
+  .foot{flex:0 0 auto;display:flex;align-items:center;gap:14px;padding:6px 2px 0}
+  .bprimary{border-width:7px 10px;border-style:solid;border-color:transparent;width:228px;
+    border-image:url('../../../../incoming/arcaea-7.0/ios/Payload/Arc-mobile.app/layouts/1080/pause/resume_button.png') 11 15 11 15 fill stretch;
+    height:44px;display:flex;align-items:center;justify-content:center;cursor:pointer}
+  .bprimary:active{filter:brightness(1.18)}
+  .bprimary .lb{font:16px 'NotoSC';color:#fff}
+  .bsecond{border-width:7px 10px;border-style:solid;border-color:transparent;width:168px;
+    border-image:url('../../../../incoming/arcaea-7.0/ios/Payload/Arc-mobile.app/layouts/1080/pause/button.png') 11 15 11 15 fill stretch;
+    height:42px;display:flex;align-items:center;justify-content:center;cursor:pointer}
+  .bsecond:active{filter:brightness(1.18)}
+  .bsecond .lb{font:14.5px 'NotoSC';color:#fff}
+  .foot .sp{flex:1}
+  .copy{font:9.5px 'L2-Regular',system-ui;color:rgba(180,172,200,.5);letter-spacing:.05em}
+
+  /* 图例（预览页，非产品元素） */
+  .legend{display:flex;gap:24px;align-items:center;flex-wrap:wrap;font-size:11px;color:#8d879c}
+  .legend .sw{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
 </style>
 </head>
 <body>
 
-<div class="pagehead">
-  <span class="cap">构建轴对照（预览专用，非产品 UI）：</span>
-  <div class="seg" id="buildSeg">
-    <div class="opt" data-mode="release">发布构建</div>
-    <div class="opt sel" data-mode="debug">开发构建</div>
-  </div>
-</div>
-
 <div class="stage">
 
-  <!-- ═══════════════ 面板 ═══════════════ -->
+  <div style="display:flex;align-items:center;gap:12px">
+    <span class="cap">构建轴对照（预览专用）：</span>
+    <div class="seg" id="buildSeg"><div class="opt sel" data-mode="debug">开发构建</div><div class="opt" data-mode="release">发布构建</div></div>
+  </div>
+
   <div class="phone">
+    <div class="scene" id="scene"></div>
+    <div class="dim"></div>
+
     <div class="panel">
-      <div class="titlebar"><div class="t">xrcdemo<span class="ver">v10.0</span></div><div class="info">ⓘ</div><div class="x">✕</div></div>
 
-      <div class="body">
+      <div class="hdr">
+        <div class="t">PRACTICE</div><div class="ver" id="ver">v10.0 · e4af9aa</div>
+        <div class="sp"></div>
+        <div class="ic info" id="infoBtn" title="说明模式（长按任一行看单项说明）"></div>
+        <div class="ic close" id="closeBtn" title="关闭并继续"><span class="xglyph">✕</span></div>
+      </div>
 
-        <!-- ① 播放（含回跳重播） -->
-        <div class="sec"><span class="lbl">播放</span><span class="hint">拖动时间轴 = 跳转</span></div>
-        <div class="card">
-          <div class="track"><div class="fill"></div><div class="ab a"></div><div class="ab b"></div><div class="knob"></div></div>
-          <div class="row" style="margin-top:8px">
-            <span class="mono" style="font-size:13px">01:23 / 03:40</span>
-            <span style="flex:1"></span><span class="btn sm">−5s</span><span class="btn sm">+5s</span>
+      <!-- ══ 时间轴区（常驻） ══ -->
+      <div class="tl">
+        <div class="tlrow">
+          <div class="dstep" id="m5">−</div>
+          <div class="stripwrap" id="strip">
+            <div class="wave" id="wave"></div>
+            <div class="band" id="band"></div>
+            <div class="hA" id="hA" title="拖动调整循环起点 A"></div>
+            <div class="hB" id="hB" title="拖动调整循环终点 B"></div>
+            <div class="head" id="head"><div class="dot"></div></div>
           </div>
-          <div class="row">
-            <span class="speed mono">0.75x</span>
-            <div class="slider"><div class="rail"><div class="fill"></div><div class="k"></div></div></div>
+          <div class="dstep" id="p5">+</div>
+        </div>
+        <div class="tlmeta">
+          <span class="tcur" id="tcur">1:26.800</span>
+          <span class="mid" id="tmid"></span>
+          <span class="ttot" id="ttot">3:47.891</span>
+        </div>
+      </div>
+
+      <!-- ══ 主区 ══ -->
+      <div class="main">
+
+        <!-- 速度列 -->
+        <div class="speedcol">
+          <div class="speedhero">
+            <div class="chev" id="spdDown" title="−0.05（长按大步 −0.25）"></div>
+            <div class="speednum" id="spdNum">1.00</div>
+            <div class="chev r" id="spdUp" title="+0.05（长按大步 +0.25）"></div>
           </div>
-          <div class="row" style="margin-top:8px">
-            <div class="sw on" style="flex:1"><span class="nm">音乐变速</span><span class="dot"></span></div>
-          </div>
-          <div class="cardsep"></div>
-          <div class="row">
-            <div class="sw on" style="flex:1"><span class="nm">回跳重播</span><span class="dot"></span></div>
-          </div>
-          <div class="note"><b>音乐变速</b>=让 BGM 跟着速度走并<b>保持音高</b>；关掉则只改谱面时钟。<br>
-            <b>回跳重播</b>=回跳到已游玩并判定过的谱面段落时，支持重新游玩该段，同时清空分数记录。</div>
+          <div class="speedlbl">速度</div>
+          <div class="rowc on" id="swAudio"><span class="nm">音乐变速</span><span class="st">已开</span></div>
+          <div class="rowc on" id="swReplay"><span class="nm">回跳重播</span><span class="st">已开</span></div>
+          <div class="hintline"><b>音乐变速</b>＝BGM 跟随速度且保持音高（FMOD 通道速率＋移调补偿）；关＝只改谱面钟。<br>
+            <b>回跳重播</b>＝回跳到已判定段落可重新游玩并清空该段记分。</div>
         </div>
 
-        <!-- ② 循环 -->
-        <div class="sec"><span class="lbl">循环</span><span class="hint">到 B 回 A</span></div>
-        <div class="card">
-          <div class="row">
-            <div class="btn" style="flex:1">设起点 A <span class="mono" style="margin-left:6px;color:var(--accent-soft)">01:02</span></div>
-            <div class="btn" style="flex:1">设终点 B <span class="mono" style="margin-left:6px;color:var(--accent-soft)">01:47</span></div>
+        <!-- 分区页签 -->
+        <div class="tabsarea">
+          <div class="tabstrip" id="tabstrip">
+            <div class="tab sel" data-pane="loop">循环</div>
+            <div class="tab" data-pane="judge">判定</div>
+            <div class="tab" data-pane="unlock">解锁</div>
+            <div class="tab" data-pane="net">网络</div>
+            <div class="tab" data-pane="store">存储</div>
+            <div class="tab" data-pane="diag">诊断</div>
           </div>
-          <div class="row">
-            <div class="sw on" style="flex:1"><span class="nm">循环</span><span class="dot"></span></div>
-            <div class="btn danger" style="flex:0 0 92px">重置区间</div>
-          </div>
-        </div>
-        <div class="note"><b>设起点/终点</b>=把当前位置记为 A / B（B 需 &gt; A+1s）；<b>循环</b>开=到 B 自动回 A。</div>
 
-        <!-- ③ 判定窗口 -->
-        <div class="sec"><span class="lbl">判定窗口</span><span class="btn sm act">应用</span></div>
-        <div class="card">
-          <div class="grid2">
-            <div class="cell"><span class="k">Max</span><div class="v">25</div></div>
-            <div class="cell"><span class="k">Pure</span><div class="v">50</div></div>
-            <div class="cell"><span class="k">Far</span><div class="v">100</div></div>
-            <div class="cell"><span class="k">Lost</span><div class="v">120</div></div>
-          </div>
-          <div class="row" style="margin-top:8px">
-            <div class="sw" style="flex:1"><span class="nm">自动演奏</span><span class="dot"></span></div>
-          </div>
-        </div>
-        <div class="note">四档 ±ms 阈值（需递增）；<b>自动演奏</b>=所有判定强制 Pure（含漏扫路径），演示/练习用。</div>
+          <div class="panehint" id="paneHint">设 A/B ＝ 把当前位置记入区间；循环开 ＝ 播到 B 自动回 A；时间轴上的菱形可直接拖动改区间</div>
 
-        <!-- ④ 解锁 -->
-        <div class="sec"><span class="lbl">解锁</span><span class="hint">离线/未授予时才有意义</span></div>
-        <div class="card"><div class="grid2">
-          <div class="sw on"><span class="nm">拥有链</span><span class="dot"></span></div>
-          <div class="sw"><span class="nm">FV 锁</span><span class="dot"></span></div>
-          <div class="sw"><span class="nm">DO 锁</span><span class="dot"></span></div>
-          <div class="sw on"><span class="nm">链门（总闸）</span><span class="dot"></span></div>
-          <div class="sw on" style="grid-column:1/-1"><span class="nm">cb 自由化</span><span class="dot"></span></div>
-        </div></div>
-        <div class="note"><b>拥有链</b>=三层判定恒真（未授予时的兜底）｜<b>FV / DO 锁</b>=特殊曲包五难度全解｜<b>链门</b>=7.0 链系统总闸｜<b>cb 自由化</b>=内容包校验恒通过且不再清树。</div>
+          <div class="panes">
 
-        <!-- ⑤ 网络 -->
-        <div class="sec"><span class="lbl">网络</span><span class="hint">只改 API 域名，不动 TLS</span></div>
-        <div class="card">
-          <div class="row">
-            <div class="sw net on" style="flex:0 0 96px"><span class="nm">私服</span><span class="dot"></span></div>
-          </div>
-          <details class="fold">
-            <summary><span class="car">▸</span>服务端地址</summary>
-            <div class="in"><div class="field">http://192.168.1.10:8080</div></div>
-          </details>
-          <div class="diag" style="margin-top:6px">改写 <span class="mono">21</span>/<span class="mono">64</span> 请求 ｜ 下载任务 <span class="mono">2</span> 建 / <span class="mono">2</span> 完</div>
-        </div>
-        <div class="note">只改 API 请求的域名（路径/参数原样、不动 TLS）；关掉走官方域。</div>
-
-        <!-- ⑥ 存储 -->
-        <div class="sec"><span class="lbl">存储</span><span class="hint">免越狱自用通道</span></div>
-        <div class="card">
-          <div class="row">
-            <div class="sw on" style="flex:0 0 120px"><span class="nm">cb 外置</span><span class="dot"></span></div>
-          </div>
-          <div class="diag" style="margin-top:6px">cb 已外置 → Documents/cb</div>
-        </div>
-        <div class="note"><b>cb 外置</b>=把内容根搬到 Documents/cb（同分区瞬间完成）。cb/active 即资源覆盖层。</div>
-
-        <!-- ⑦ 诊断 -->
-        <div class="sec"><span class="lbl">诊断</span><span class="hint">日志 xrcdemo.log</span></div>
-        <div class="card">
-          <div class="diag">
-            <span class="tag">stub ✓</span><span class="tag">v2 ✓</span><span class="tag">judge ✓</span><span class="tag">gp ✓</span><span class="tag">mtp ✓</span>
-          </div>
-          <div class="diag">补丁：<span class="ok">cb 自由化 启用</span>（校验恒通过 / 清树禁用）</div>
-
-          <!-- 开发构建专属 -->
-          <div class="dbg">
-            <div class="row" style="margin-bottom:8px">
-              <span class="badge dev">开发</span><span class="diag">以下工具随开发构建提供</span>
+            <!-- 循环 -->
+            <div class="pane sel" data-pane="loop" data-hint="设 A/B ＝ 把当前位置记入区间；循环开 ＝ 播到 B 自动回 A；A/B 菱形可直接拖动">
+              <div class="rowc" id="setA"><span class="nm">设起点 A</span><span class="val" id="valA">01:02.400</span></div>
+              <div class="rowc" id="setB"><span class="nm">设终点 B</span><span class="val" id="valB">01:47.200</span></div>
+              <div class="rowc on" id="swLoop"><span class="nm">循环</span><span class="st">已开</span></div>
+              <div class="rowc danger" id="resetLoop"><span class="nm">重置区间</span></div>
+              <div class="hintline">循环区间需 ≥1s；关闭循环保留区间值，重开即用。</div>
             </div>
-            <div class="row">
-              <span class="diag" style="flex:0 0 48px">日志档位</span>
-              <div class="seg" id="logSeg" style="flex:1">
-                <div class="opt sel">默认</div><div class="opt">详细</div><div class="opt">网络</div>
+
+            <!-- 判定 -->
+            <div class="pane" data-pane="judge" data-hint="四档 ±ms 阈值（需递增），只改本地判定宽容度，不动谱面">
+              <div class="rowc"><span class="nm">Max</span><div class="steps stepset" data-v="25"><div class="dstep m">−</div><div class="val">25</div><div class="dstep p">+</div></div></div>
+              <div class="rowc"><span class="nm">Pure</span><div class="steps stepset" data-v="50"><div class="dstep m">−</div><div class="val">50</div><div class="dstep p">+</div></div></div>
+              <div class="rowc"><span class="nm">Far</span><div class="steps stepset" data-v="100"><div class="dstep m">−</div><div class="val">100</div><div class="dstep p">+</div></div></div>
+              <div class="rowc"><span class="nm">Lost</span><div class="steps stepset" data-v="120"><div class="dstep m">−</div><div class="val">120</div><div class="dstep p">+</div></div></div>
+              <div class="bwrap" id="judgeApply"><div class="lb">应用</div></div>
+              <div class="rowc" id="swAutoplay"><span class="nm">自动演奏</span><span class="st">已关</span></div>
+              <div class="hintline"><b>自动演奏</b>＝所有判定强制 Pure（含漏扫路径），演示/练习用。</div>
+            </div>
+
+            <!-- 解锁 -->
+            <div class="pane" data-pane="unlock" data-hint="离线 / 未授予时才有意义">
+              <div class="rowc on" data-sw="own"><span class="nm">拥有链</span><span class="st">已开</span></div>
+              <div class="rowc" data-sw="fv"><span class="nm">FV 锁</span><span class="st">已关</span></div>
+              <div class="rowc" data-sw="do"><span class="nm">DO 锁</span><span class="st">已关</span></div>
+              <div class="rowc on" data-sw="gate"><span class="nm">链门（总闸）</span><span class="st">已开</span></div>
+              <div class="rowc on" data-sw="cb"><span class="nm">cb 自由化</span><span class="st">已开</span></div>
+              <div class="hintline"><b>拥有链</b>＝三层判定恒真兜底｜<b>FV / DO</b>＝特殊曲包五难度全解｜<b>链门</b>＝7.0 链系统总闸｜<b>cb 自由化</b>＝内容包校验恒通过且不再清树。</div>
+            </div>
+
+            <!-- 网络 -->
+            <div class="pane" data-pane="net" data-hint="只改 API 域名（路径 / 参数原样、不动 TLS）；关掉走官方域">
+              <div class="rowc on" id="swNet"><span class="nm">私服</span><span class="st">已开</span></div>
+              <div class="rowc" id="netAddr"><span class="nm">服务端地址</span><span class="val">http://192.168.1.10:8080</span><span class="chevmark">▸</span></div>
+              <div class="stat">改写 <span id="netN">21</span>/64 请求 ｜ 下载任务 2 建 / 2 完</div>
+              <div class="hintline">展开地址行可直接编辑；保存后即刻生效。</div>
+            </div>
+
+            <!-- 存储 -->
+            <div class="pane" data-pane="store" data-hint="免越狱自用通道">
+              <div class="rowc on" id="swStore"><span class="nm">cb 外置</span><span class="st">已开</span></div>
+              <div class="stat">cb 已外置 → Documents/cb</div>
+              <div class="hintline"><b>cb 外置</b>＝把内容根搬到 Documents/cb（同分区瞬间完成）；cb/active 即资源覆盖层，放入同名文件即可覆盖包内资源。</div>
+            </div>
+
+            <!-- 诊断 -->
+            <div class="pane" data-pane="diag" data-hint="日志 xrcdemo.log">
+              <div class="chips">
+                <span class="chip">stub ✓</span><span class="chip">v2 ✓</span><span class="chip">judge ✓</span>
+                <span class="chip">gp ✓</span><span class="chip">mtp ✓</span>
+              </div>
+              <div class="stat">补丁：<span class="ok">cb 自由化 启用</span>（校验恒通过 / 清树禁用）</div>
+              <div class="segrow"><span class="nm">日志档位</span>
+                <div class="segc" id="logSeg">
+                  <div class="o sel">默认</div><div class="o">详细</div><div class="o">网络</div>
+                </div>
+              </div>
+              <div class="dev">
+                <div class="devhead"><span class="badge">开发</span>以下工具随开发构建提供</div>
+                <div class="devgrid">
+                  <div class="bwrap"><div class="lb">转储内存</div></div>
+                  <div class="bwrap"><div class="lb">清理转储</div></div>
+                  <div class="bwrap"><div class="lb">OM 探针</div></div>
+                  <div class="bwrap"><div class="lb">强制 applog</div></div>
+                </div>
+                <div class="rowc" id="swStubs"><span class="nm">观测桩轻量</span><span class="st">已关</span></div>
+                <div class="hintline">转储 → Documents/xrcdemo-net/mem/；强制 applog 需二次确认；日志档位写入配置、重启保持。</div>
               </div>
             </div>
-            <div class="row" style="margin-top:8px">
-              <div class="btn sm" style="flex:1">转储内存</div>
-              <div class="btn sm" style="flex:1">清理转储</div>
-            </div>
-            <div class="row">
-              <div class="btn sm" style="flex:1">OM 探针</div>
-              <div class="btn sm" style="flex:1">强制 applog</div>
-            </div>
-            <div class="row" style="margin-top:8px">
-              <div class="sw" style="flex:1"><span class="nm">观测桩轻量</span><span class="dot"></span></div>
-            </div>
-            <div class="diag" style="margin-top:6px">日志档位写入配置、重启保持；转储 → Documents/xrcdemo-net/mem/；强制 applog 需二次确认。</div>
+
           </div>
         </div>
-
-        <div class="note" style="margin-top:10px">长按任一项 = 查看说明；单击 = 切换。</div>
-        <div class="copy">© 雾月星辰&MLXC/github@XingChenRS</div>
-
       </div>
+
+      <!-- ══ 底栏 ══ -->
+      <div class="foot">
+        <div class="bprimary" id="resume"><div class="lb">继续</div></div>
+        <div class="bsecond" id="resetLoop2"><div class="lb">复位循环</div></div>
+        <div class="sp"></div>
+        <div class="copy">© 雾月星辰&MLXC/github@XingChenRS</div>
+      </div>
+
     </div>
   </div>
 
-  <!-- ═══════════════ 侧栏 ═══════════════ -->
-  <div class="side">
-
-    <div class="ballonly">
-        <div class="ball"><img src="data:image/jpeg;base64,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" alt=""><span class="stamp">a3f9c21</span></div>
-    </div>
-
-    <div class="card">
-      <div class="sec" style="margin-top:0"><span class="lbl">图例</span><span class="hint">语义样式</span></div>
-      <div class="legend"><span class="lab">开关 · 开</span><div class="sw on" style="flex:1;height:26px"><span class="nm" style="font-size:11px">名称</span><span class="dot"></span></div></div>
-      <div class="legend"><span class="lab">开关 · 关</span><div class="sw" style="flex:1;height:26px"><span class="nm" style="font-size:11px">名称</span><span class="dot"></span></div></div>
-      <div class="legend"><span class="lab">动作</span><div class="btn sm" style="flex:1">动作按钮</div></div>
-      <div class="legend"><span class="lab">破坏性</span><div class="btn sm danger" style="flex:1">重置区间</div></div>
-      <div class="legend"><span class="lab">构建标记</span><span class="badge dev">开发</span></div>
-    </div>
-
+  <div class="legend">
+    <span><span class="sw" style="background:#fff"></span>状态·已开（亮白）</span>
+    <span><span class="sw" style="background:rgba(168,158,186,.9)"></span>状态·已关（暗紫灰）</span>
+    <span><span class="sw" style="background:var(--lav)"></span>取值（Exo 淡紫）</span>
+    <span><span class="sw" style="background:var(--danger)"></span>破坏性（红字行）</span>
+    <span><span class="sw" style="background:var(--accent-band)"></span>循环区间</span>
+    <span class="cap">开关＝点整行 · 数值＝菱形± · 长按任一行看说明</span>
   </div>
 </div>
 
 <script>
-  // 开关演示：点击翻转视觉状态
-  document.querySelectorAll('.sw').forEach(function(s){
-    s.addEventListener('click', function(){ s.classList.toggle('on'); });
-  });
-  // 构建轴对照：发布构建不渲染开发专属区
-  var body = document.body;
-  document.querySelectorAll('#buildSeg .opt').forEach(function(o){
-    o.addEventListener('click', function(){
-      document.querySelectorAll('#buildSeg .opt').forEach(function(x){ x.classList.remove('sel'); });
-      o.classList.add('sel');
-      body.classList.toggle('release', o.dataset.mode === 'release');
-    });
-  });
-  // 日志档位分段演示
-  document.querySelectorAll('#logSeg .opt').forEach(function(o){
-    o.addEventListener('click', function(){
-      document.querySelectorAll('#logSeg .opt').forEach(function(x){ x.classList.remove('sel'); });
-      o.classList.add('sel');
-    });
-  });
+/* ── 说明书背景条纹（场景衬托） ── */
+(function(){var s=document.getElementById('scene'),r=7;
+  for(var i=0;i<26;i++){var e=document.createElement('i');var w=30+r*13%150;
+    e.style.cssText='left:'+(r*137%100)+'%;top:'+(r*61%100)+'%;width:'+w+'px;height:'+(2+r%5)+'px;transform:rotate('+(r*23%360)+'deg)';s.appendChild(e);r=r*31%997;}})();
+
+/* ── 时间轴：密度条 / 播放头 / 循环区间 ── */
+var TOTAL=3*60000+47*1000+891, cur=1*60000+26*1000+800, spd=1.0;
+var A=0.183, B=0.472, loopOn=true;           /* 归一化区间位置 */
+var wave=document.getElementById('wave');
+var BARS=160, seed=41;
+for(var i=0;i<BARS;i++){seed=seed*73%104729;
+  var h=18+ (seed%54);
+  if(seed%7===0) h=78;                        /* 稀疏长条＝段落感 */
+  var b=document.createElement('i'); b.style.height=h+'%'; wave.appendChild(b);}
+function fmt(ms){ms=Math.max(0,Math.min(TOTAL,Math.round(ms)));
+  var m=Math.floor(ms/60000), s=ms%60000, ss=Math.floor(s/1000), mmm=s%1000;
+  return m+':'+String(ss).padStart(2,'0')+'.'+String(mmm).padStart(3,'0');}
+function redraw(){
+  var p=cur/TOTAL;
+  document.getElementById('head').style.left=(p*100)+'%';
+  document.getElementById('tcur').textContent=fmt(cur);
+  var on={}; [].forEach.call(wave.children,function(b,idx){
+    var bp=idx/(BARS-1); var played=bp<=p; var inLoop=bp>=A&&bp<=B;
+    b.className=played?'on':(loopOn&&inLoop?'loop':'');});
+  var band=document.getElementById('band');
+  band.className='band'+(loopOn?'':' off');
+  band.style.left=(A*100)+'%'; band.style.width=((B-A)*100)+'%';
+  document.getElementById('hA').style.left=(A*100)+'%';
+  document.getElementById('hB').style.left=(B*100)+'%';
+  document.getElementById('tmid').innerHTML='<b>A</b>'+fmt(A*TOTAL)+'　<b>B</b>'+fmt(B*TOTAL);
+  document.getElementById('valA').textContent=fmt(A*TOTAL);
+  document.getElementById('valB').textContent=fmt(B*TOTAL);
+  document.getElementById('spdNum').textContent=spd.toFixed(2);
+}
+/* 拖动播放头 seek */
+var strip=document.getElementById('strip'), dragHead=false;
+strip.addEventListener('pointerdown',function(e){ if(e.target.classList.contains('hA')||e.target.classList.contains('hB'))return;
+  dragHead=true; var r=strip.getBoundingClientRect(); cur=(e.clientX-r.left)/r.width*TOTAL; redraw();});
+addEventListener('pointermove',function(e){ if(!dragHead)return; var r=strip.getBoundingClientRect();
+  cur=Math.max(0,Math.min(TOTAL,(e.clientX-r.left)/r.width*TOTAL)); redraw();});
+addEventListener('pointerup',function(){dragHead=false;});
+/* 拖动 A/B */
+function bindHandle(id,setter){var h=document.getElementById(id),on=false;
+  h.addEventListener('pointerdown',function(e){on=true;e.stopPropagation();});
+  addEventListener('pointermove',function(e){if(!on)return;var r=strip.getBoundingClientRect();
+    setter(Math.max(0,Math.min(1,(e.clientX-r.left)/r.width))); redraw();});
+  addEventListener('pointerup',function(){on=false;});}
+bindHandle('hA',function(v){A=Math.min(v,B-0.03);});
+bindHandle('hB',function(v){B=Math.max(v,A+0.03);});
+/* ±5s */
+document.getElementById('m5').onclick=function(){cur-=5000*spd;redraw();};
+document.getElementById('p5').onclick=function(){cur+=5000*spd;redraw();};
+/* 速度 */
+function setSpd(v){spd=Math.max(0.05,Math.min(2,Math.round(v*100)/100));redraw();}
+document.getElementById('spdDown').onclick=function(){setSpd(spd-0.05);};
+document.getElementById('spdUp').onclick=function(){setSpd(spd+0.05);};
+
+/* ── 页签 ── */
+var hint=document.getElementById('paneHint');
+document.querySelectorAll('#tabstrip .tab').forEach(function(t){
+  t.onclick=function(){document.querySelectorAll('#tabstrip .tab').forEach(x=>x.classList.remove('sel'));
+    t.classList.add('sel');
+    document.querySelectorAll('.pane').forEach(function(p){p.classList.toggle('sel',p.dataset.pane===t.dataset.pane);});
+    var pane=document.querySelector('.pane[data-pane="'+t.dataset.pane+'"]');
+    hint.textContent=pane.dataset.hint;};});
+
+/* ── 开关行（名称＋状态词，点整行切换） ── */
+document.querySelectorAll('.rowc').forEach(function(r){
+  if(!r.querySelector('.st'))return;
+  r.onclick=function(){r.classList.toggle('on');
+    var st=r.querySelector('.st'); st.textContent=r.classList.contains('on')?'已开':'已关';};});
+/* 循环开关联动区间带 */
+document.getElementById('swLoop').addEventListener('click',function(){loopOn=!loopOn;redraw();});
+/* 重置区间 */
+function reset(){A=0;B=1;loopOn=false;document.getElementById('swLoop').classList.remove('on');
+  document.getElementById('swLoop').querySelector('.st').textContent='已关';redraw();}
+document.getElementById('resetLoop').onclick=reset;
+document.getElementById('resetLoop2').onclick=reset;
+/* 设 A/B ＝ 当前位置 */
+document.getElementById('setA').onclick=function(){A=Math.min(cur/TOTAL,B-0.03);redraw();};
+document.getElementById('setB').onclick=function(){B=Math.max(cur/TOTAL,A+0.03);redraw();};
+
+/* ── 判定步进器 ── */
+document.querySelectorAll('.stepset').forEach(function(s){
+  var v=+s.dataset.v, out=s.querySelector('.val');
+  s.querySelector('.m').onclick=function(e){e.stopPropagation();v=Math.max(5,v-5);out.textContent=v;};
+  s.querySelector('.p').onclick=function(e){e.stopPropagation();v=v+5;out.textContent=v;};});
+
+/* ── 分段 / 说明模式 / 构建轴 ── */
+document.querySelectorAll('#logSeg .o').forEach(function(o){
+  o.onclick=function(){document.querySelectorAll('#logSeg .o').forEach(x=>x.classList.remove('sel'));o.classList.add('sel');};});
+document.getElementById('infoBtn').onclick=function(){document.body.classList.toggle('info');};
+document.getElementById('closeBtn').onclick=document.getElementById('resume').onclick=function(){};
+document.querySelectorAll('#buildSeg .opt').forEach(function(o){
+  o.onclick=function(){document.querySelectorAll('#buildSeg .opt').forEach(x=>x.classList.remove('sel'));
+    o.classList.add('sel');document.body.classList.toggle('release',o.dataset.mode==='release');};});
+
+redraw();
 </script>
 </body>
 </html>
