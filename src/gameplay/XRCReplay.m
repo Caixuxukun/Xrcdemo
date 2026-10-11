@@ -1058,6 +1058,23 @@ static void rpf_rebuild_main(void *ctx) {
         rd(mgr + RPF_RM_REG_END, &re0, 8);
         long n0 = (s_ishp(rb0) && s_ishp(re0) && re0 >= rb0) ? (long)((re0 - rb0) / 8) : -1;
         xrc_rebuild_t fn = (xrc_rebuild_t)(g_xrc.image_base + (0x100B22984ULL - 0x100000000ULL));
+        /* **旧对象整体隐藏**：重建 = 以新代旧。旧对象不再被引擎 tick（logic+0x40 已指向新
+           对象），会把撤销那一刻的可见状态冻结在场景里——弧的落点菱形/起手箭头等
+           （固定在判定线上的可见子件）即以"残留点"的形态留下，且每次重建累积一批。
+           处理：对旧注册区 [0, n0) 逐个调节点槽 42（setVisible，0）——不动节点树、
+           不释放、不摘除，仅置可见位；新对象的可见性随后由引擎正常驱动。 */
+        if (n0 > 0 && s_ishp(rb0)) {
+            int nhide = 0;
+            for (long i = 0; i < n0; i++) {
+                uint64_t rn = 0, rvt = 0, f336 = 0;
+                if (!rd(rb0 + 8 * (uint64_t)i, &rn, 8) || !s_ishp(rn)) continue;
+                if (!rd(rn, &rvt, 8) || !s_isptr(rvt)) continue;
+                if (!rd(rvt + 336, &f336, 8) || !s_isptr(f336)) continue;
+                ((void (*)(uint64_t, uint64_t))f336)(rn, 0);
+                nhide++;
+            }
+            xrc_logd(XRCLC_JUDGE, @"[rpf] ⟲⟲⟲ 旧渲染对象隐藏：%d/%ld（置可见位，不动树）", nhide, n0);
+        }
         xrc_logd(XRCLC_JUDGE, @"[rpf] ⟲⟲⟲ 重建渲染对象（主队列）：%d 条 → mgr=%llx", n, mgr);
         fn((void *)mgr, vec, NULL);
         xrc_logd(XRCLC_JUDGE, @"[rpf] ⟲⟲⟲ 重建渲染对象：完成");

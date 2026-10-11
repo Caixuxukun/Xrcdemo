@@ -1,8 +1,9 @@
 // © 雾月星辰 & MLXC · github@XingChenRS
-// XRCPracticePanel.h — 练习面板（设计稿：ui-mock/panel_mock.html v3）。
-// 结构：固定标题栏（拖动 + 说明 + 关闭；标题 = 版本号）+ 可滚动内容区（上限 72% 屏高）。
-// 分区：播放（时间轴 / ±5s / 速度 / 音乐变速 / 回跳重播）｜循环（设 A/B + 开关 + 重置）
-//       ｜判定窗口（四档 + 应用 + 自动演奏）｜解锁｜网络｜存储｜诊断。
+// XRCPracticePanel.h — 练习面板（设计稿：ui-mock/panel_mock.html v4，Arcaea 原生风格）。
+// 形态：全屏模态。打开**不**暂停播放；触碰时间轴＝冻结＋实时对齐预览，松手驻停，
+//       「继续/关闭」才恢复播放（交互协议见 XRCTimelineView.h）。
+// 分区（页签）：循环｜判定｜解锁｜网络（发布构建为阻断声明页）｜存储｜诊断。
+// 素材/字体/量纲统一走 XRCTheme（包内原文件，见其头注释）。
 #pragma once
 
 #import <UIKit/UIKit.h>
@@ -14,7 +15,7 @@
 - (void)hide;
 - (BOOL)isVisible;
 
-// 面板显示时的每帧刷新（外部 0.1s 定时器驱动）。
+// 面板显示时的周期刷新（内部 0.1s 定时器；外部也可手动调用）。
 - (void)tick;
 
 @end

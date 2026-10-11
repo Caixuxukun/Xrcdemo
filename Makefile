@@ -25,6 +25,7 @@ xrcdemo_FILES += src/diag/XRCProbe.m
 xrcdemo_FILES += src/diag/XRCDump.m
 xrcdemo_FILES += src/diag/XRCOMLog.m
 xrcdemo_FILES += src/ui/XRCFloatButton.m
+xrcdemo_FILES += src/ui/XRCTheme.m
 xrcdemo_FILES += src/ui/XRCTimelineView.m
 xrcdemo_FILES += src/ui/XRCSwitchRow.m
 xrcdemo_FILES += src/ui/XRCPracticePanel.m

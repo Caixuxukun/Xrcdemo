@@ -255,11 +255,16 @@ static _Atomic(int)      s_practice_paused = 0;
 static _Atomic(uint32_t) s_scrub_ms   = 0;
 static _Atomic(int)      s_scrub_pend = 0;
 static _Atomic(uint64_t) s_scrub_us   = 0;      // 最近一次拖动落笔（真实时间）
+// 暂停期间的「谱面钟钉点」：warp 冻结管不住谱面钟的推进（v10 冻结窗的钉住同样靠
+// 每帧 base 平移实现）——暂停期间每帧把钟平移回 pin，拖动落笔即更新 pin。
+static _Atomic(int32_t)  s_pin_ms    = 0;
+static _Atomic(int)      s_pin_valid = 0;
 
 void xrc_gameplay_pause(bool on) {
     int prev = atomic_exchange(&s_practice_paused, on ? 1 : 0);
     if (prev == (on ? 1 : 0)) return;                     /* 幂等 */
     if (on) {
+        atomic_store(&s_pin_valid, 0);            // 首帧由 s_pause_tick 取当前钟值作 pin
         xrc_player_pause_hold(true);
         xrc_clock_freeze_inc();
         xrc_logd(XRCLC_JUDGE, @"练习暂停：开（音频 hold + 钟冻结，freeze=%d）",
@@ -304,6 +309,8 @@ static void s_scrub_tick(void *self) {
         atomic_store(&s_own_seek_us, xrc_real_now_us());   /* retry 监视豁免 */
     }
     xrc_clock_shift_to(ng, (int32_t)ms);
+    atomic_store(&s_pin_ms, (int32_t)ms);
+    atomic_store(&s_pin_valid, 1);
     s_gp_last_real_us = 0;                      /* 钟被移动：retime 基准作废 */
     atomic_store(&s_scrub_us, xrc_real_now_us());
 }
@@ -389,6 +396,20 @@ static void s_pause_tick(void *ngp) {
         uint8_t g = *(uint8_t *)((char *)ng + XRC_NG_JUDGE_GATE_OFF);
         if (!(g & 1)) *(uint8_t *)((char *)ng + XRC_NG_JUDGE_GATE_OFF) = (uint8_t)(g | 1);
         int32_t cur = xrc_chart_clock_ms(ngp);
+        /* **钟钉**：暂停期间每帧把谱面钟平移回 pin（warp 冻结之外的第二道，也是真正
+           管住谱面钟的一道——拖动不松手时"播放一小段再回跳"即缺它所致）。 */
+        if (cur >= 0) {
+            if (!atomic_load(&s_pin_valid)) {
+                atomic_store(&s_pin_ms, cur);      // 首帧取当前值
+                atomic_store(&s_pin_valid, 1);
+                xrc_logd(XRCLC_JUDGE, @"练习暂停：钟钉住 pin=%d（freeze=%d）",
+                         cur, xrc_clock_freeze_count());
+            } else {
+                int32_t pin = atomic_load(&s_pin_ms);
+                if (cur != pin) xrc_clock_shift_to(ngp, pin);
+                cur = pin;
+            }
+        }
         if (cur >= 0) s_pause_pass_skip_tick(ng, cur);
         /* 驻停看护：冻结计数归零即当场补回（日志上方 [clock] freeze 行可点名来源） */
         if (!atomic_load(&s_frz_state) && xrc_clock_freeze_count() == 0) {
