@@ -155,22 +155,24 @@ static NSString *const kNoteSpeed =
     CGFloat W = self.bounds.size.width, H = self.bounds.size.height;
     if (W < 10) W = 852 * S, H = 393 * S;   // show 前被问到时兜底
 
-    // 暗化层（游戏素材，四角自渐隐）
-    self.dim = [[UIImageView alloc] initWithFrame:self.bounds];
+    // 暗化层（游戏素材，四角自渐隐；外扩 6% 让淡边落到窗口外，与 UI 稿一致）
+    CGRect df = CGRectInset(self.bounds, -self.bounds.size.width * 0.06, -self.bounds.size.height * 0.06);
+    self.dim = [[UIImageView alloc] initWithFrame:df];
     self.dim.image = xrc_theme_img(@"layouts/1080/pause/pause_background_shadow.png");
     self.dim.contentMode = UIViewContentModeScaleToFill;
     self.dim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self addSubview:self.dim];
 
-    // 玻璃卡面（pause_backing 九宫格；素材缺失时回退深紫半透明）
+    // 玻璃卡面（pause_backing 九宫格 + 深紫底衬两层，与 UI 稿一致）。素材中段自带透明区
+    // 与底部淡出带，只铺纹理不垫底色会发透、白字读数不清；底色常开，纹理只叠加。
     CGRect pf = CGRectInset(self.bounds, 10, 10);
     self.glass = [[UIImageView alloc] initWithFrame:pf];
     self.glass.image = xrc_theme_img9(@"layouts/1080/pause/pause_backing.png", 87, 22, 87, 22);
-    self.glass.backgroundColor = self.glass.image ? [UIColor clearColor]
-                                                  : [UIColor colorWithRed:37/255.0 green:23/255.0 blue:42/255.0 alpha:0.55];
+    self.glass.backgroundColor = [UIColor colorWithRed:37/255.0 green:23/255.0 blue:42/255.0
+                                                 alpha:self.glass.image ? 0.55 : 0.62];
     self.glass.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    self.glass.layer.cornerRadius = 12;
-    self.glass.layer.masksToBounds = YES;
+    self.glass.layer.cornerRadius = 12;   // 只圆底色；不 masksToBounds（纹理自带圆角软边，不裁切）
+    self.glass.userInteractionEnabled = YES;   // UIImageView 默认不吃触摸：不开则整块卡面（含全部控件）点不动
     [self addSubview:self.glass];
 
     CGFloat padL = xrc_theme_px(26), padR = xrc_theme_px(26), padT = xrc_theme_px(2), padB = xrc_theme_px(10);
@@ -1178,17 +1180,17 @@ static NSString *const kNoteSpeed =
 #pragma mark - 刷新
 
 - (void)refreshFast {
-    uint32_t len = xrc_player_song_length_ms();
+    uint32_t lenRaw = xrc_player_song_length_ms();
     uint32_t pos = xrc_player_position_ms();
-    if (len == 0) len = MAX(pos, 1000);
+    uint32_t len = lenRaw ? lenRaw : MAX(pos, 1000);   // 非对局给时间轴一个占位长度
     self.timeline.lengthMs = len;
     self.timeline.positionMs = pos;
     uint32_t from = 0, to = 0;
     xrc_loop_get_range(&from, &to);
     [self.timeline setLoopFromMs:from to:to visible:xrc_loop_get_enabled()];
 
-    if (!xrc_cap_player()) {
-        self.tcur.text = @"--:--"; self.ttot.text = @"--:--";
+    if (!xrc_cap_player() || lenRaw == 0) {
+        self.tcur.text = @"--:--"; self.ttot.text = @"--:--";   // 非对局：不显示占位长度
     } else {
         self.tcur.text = [NSString stringWithFormat:@"%u:%02u.%03u",
                           pos / 60000, (pos / 1000) % 60, pos % 1000];
