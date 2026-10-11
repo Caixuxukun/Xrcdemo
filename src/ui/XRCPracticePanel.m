@@ -87,7 +87,7 @@ static NSString *const kNoteSpeed =
 // 判定步进（草稿：stepper 改动后置 dirty，应用时提交）
 @property (nonatomic, strong) NSMutableArray<UILabel *> *judgeVals;
 @property (nonatomic, assign) BOOL judgeDirty;
-#property (nonatomic, strong) NSArray<UIButton *> *logBtns;   // 仅开发构建会填充；属性常驻避免门控分裂
+@property (nonatomic, strong) NSArray<UIButton *> *logBtns;   // 仅开发构建会填充；属性常驻避免门控分裂
 @property (nonatomic, assign) NSInteger logSel;
 @end
 
@@ -670,16 +670,23 @@ static NSString *const kNoteSpeed =
         NSArray *feats  = @[@"unlock_own", @"unlock_lock", @"unlock_lock", @"unlock_lock", @"cb_free"];
         for (int i = 0; i < 5; i++) {
             if (!xrc_feature_present([feats[i] UTF8String])) continue;
-            UILabel *st = nil;
-            switch (i) {
-                case 0: self.stOwn = [self toggleRowIn:self.pane y:y title:titles[i] on:xrc_brk_unlock_own() block:^{ [ws toggleOwn]; } note:nil]; st = self.stOwn; break;
-                case 1: self.stFv  = [self toggleRowIn:self.pane y:y title:titles[i] on:xrc_brk_unlock_fv()  block:^{ [ws toggleFv]; }  note:nil]; st = self.stFv; break;
-                case 2: self.stDo  = [self toggleRowIn:self.pane y:y title:titles[i] on:xrc_brk_unlock_do()  block:^{ [ws toggleDo]; }  note:nil]; st = self.stDo; break;
-                case 3: self.stGate= [self toggleRowIn:self.pane y:y title:titles[i] on:xrc_brk_gate_open() block:^{ [ws toggleGate]; } note:nil]; st = self.stGate; break;
-                case 4: self.stCb  = [self toggleRowIn:self.pane y:y title:titles[i] on:xrc_brk_cb_bypass() block:^{ [ws toggleCb]; }  note:nil]; st = self.stCb; break;
-                default: break;
+            // 不使用 switch：case 标签会跨过含弱捕获 block 的语句，构成非法跳转
+            if (i == 0) {
+                self.stOwn = [self toggleRowIn:self.pane y:y title:titles[i] on:xrc_brk_unlock_own()
+                                         block:^{ [ws toggleOwn]; } note:nil];
+            } else if (i == 1) {
+                self.stFv = [self toggleRowIn:self.pane y:y title:titles[i] on:xrc_brk_unlock_fv()
+                                        block:^{ [ws toggleFv]; } note:nil];
+            } else if (i == 2) {
+                self.stDo = [self toggleRowIn:self.pane y:y title:titles[i] on:xrc_brk_unlock_do()
+                                        block:^{ [ws toggleDo]; } note:nil];
+            } else if (i == 3) {
+                self.stGate = [self toggleRowIn:self.pane y:y title:titles[i] on:xrc_brk_gate_open()
+                                          block:^{ [ws toggleGate]; } note:nil];
+            } else {
+                self.stCb = [self toggleRowIn:self.pane y:y title:titles[i] on:xrc_brk_cb_bypass()
+                                        block:^{ [ws toggleCb]; } note:nil];
             }
-            (void)st;
             y += xrc_theme_px(38);
         }
         y += [self hintLineIn:self.pane y:y text:kNoteUnlock];
