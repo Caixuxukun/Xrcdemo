@@ -32,6 +32,9 @@
 #import "XRCTimelineView.h"
 #import "XRCTheme.h"
 
+// 开发构建专属区（release 下整段编译为空；常量与调用点统一以此门控）
+#define XRC_DEV_SECTION (XRC_DEBUG_BUILD)
+
 // ---------------- 说明文本（ⓘ 模式逐页展示；长按单项另见各 note） ----------------
 static NSString *const kNoteLoop =
     @"设 A/B ＝ 把当前位置记入区间；循环开 ＝ 播到 B 自动回 A。时间轴上的 A/B 菱形可直接拖动改区间。\n"
@@ -42,21 +45,22 @@ static NSString *const kNoteJudge =
 static NSString *const kNoteUnlock =
     @"拥有链＝三层判定恒真兜底（覆盖未授予场景）｜FV/DO 锁＝特殊曲包五难度全解｜"
     @"链门＝7.0 链系统总闸｜cb 自由化＝内容包校验恒通过且不再清树。";
+#if XRC_DEV_SECTION   // 开发专属注记：不进入发布包（发布包不携带私服/开发工具文本）
 static NSString *const kNoteNet =
     @"只改 API 请求的域名（路径/参数原样、不动 TLS）；关掉走官方域。私服内容的版权 /\n"
     @"数据处理 / 安全性由使用者自负；默认练习能力不强制绑定私服。";
+#endif
 static NSString *const kNoteStore =
     @"把 cb 内容根从 Library/Application Support 搬到 Documents/cb（同一分区，瞬间完成，不拷贝）。\n"
     @"cb/active 即资源覆盖层：同名文件按相同相对路径放入即覆盖包内资源；cb 下载也落在这里。";
 static NSString *const kNoteDiag =
     @"日志档位：默认＝只记要点；详细＝全量 DEBUG；网络＝只放开网络/下载/内容。日志在 Documents/xrcdemo.log。";
+#if XRC_DEV_SECTION
 static NSString *const kNoteDev =
     @"转储 → Documents/xrcdemo-net/mem/；强制 applog 需二次确认；观测桩轻量＝重活停摆、只推进 PC。";
+#endif
 static NSString *const kNoteSpeed =
     @"点按 ±0.05，长按大步 ±0.25。音乐变速＝BGM 跟随速度且保持音高；关＝只改谱面钟。";
-
-// 开发构建专属工具区（release 下整段编译为空）
-#define XRC_DEV_SECTION (XRC_DEBUG_BUILD)
 
 @interface XRCPracticePanel ()
 // 结构
