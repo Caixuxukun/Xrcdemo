@@ -34,8 +34,24 @@ typedef enum {
     XRC_OP_LOOP_REWIND,   // A-B 循环回到 A（seek 平移）
 } xrc_op_t;
 
-// UI 登记（非阻塞）：返回是否受理（状态机忙时拒绝）。
+// UI 登记（非阻塞）：返回是否受理（状态机忙时拒绝）。同族（seek/回位）后到者覆盖前项。
 bool xrc_gameplay_request(xrc_op_t op, uint32_t param_ms);
+
+// ---- 练习暂停（面板开 = 暂停的总入口）----
+// 音频暂停（持有计数）+ 谱面钟冻结（warp freeze 计数）的组合；暂停期间循环 tick
+// 自动抑制（防止拖动/浏览时被自动回位打断）。幂等。
+void xrc_gameplay_pause(bool on);
+
+// ---- 拖动 seek（实时对齐预览）----
+// 轻量定位：只做「音频 seek + 谱面钟 base 平移」，不开冻结窗、不触发重播事务、
+// 不受 1.5s 冷却限制；实际落笔在下一帧 gp.update（与游戏 tick 串行）。拖动会话
+// 期间 XRCReplay 的回落检出自动豁免（水位线冻结）；松手后按最终目标走常规
+// seek 提交（回退幅度大时由检出发起重播事务）。冻结窗进行中不生效（本次忽略，
+// 下一次移动即恢复）。返回是否受理。
+bool xrc_gameplay_scrub(uint32_t ms);
+
+// 最近一次拖动落笔的真实时间（us）。XRCReplay 用它做检出豁免窗。
+uint64_t xrc_gameplay_scrub_us(void);
 
 // 当前 pending 状态（UI 显示/防重入用）。
 

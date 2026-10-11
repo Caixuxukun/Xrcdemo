@@ -31,18 +31,26 @@
 
 - (void)onTap:(UITapGestureRecognizer *)g {
     CGPoint p = [g locationInView:self];
-    if (self.onScrub) self.onScrub([self msAtX:p.x], YES);
+    uint32_t ms = [self msAtX:p.x];
+    /* 点按 = 一次完整的三段（按下→落位→驻停）：行为与拖动一致，仅无中间移动。 */
+    if (self.onScrubBegin) self.onScrubBegin();
+    if (self.onScrubLive) self.onScrubLive(ms);
+    if (self.onScrubEnd) self.onScrubEnd(ms);
 }
 
 - (void)onPan:(UIPanGestureRecognizer *)g {
     CGPoint p = [g locationInView:self];
-    // 拖动 = 纯 seek 预览，松手执行。
+    // 拖动 = 实时对齐预览：移动期间逐笔落位（面板侧轻量定位），松手驻停提交。
     // 循环区间只由「设起点/设终点」按钮写入。
+    if (g.state == UIGestureRecognizerStateBegan) {
+        if (self.onScrubBegin) self.onScrubBegin();
+    }
     if (g.state == UIGestureRecognizerStateChanged) {
         self.positionMs = [self msAtX:p.x];
+        if (self.onScrubLive) self.onScrubLive(self.positionMs);
     }
     if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled) {
-        if (self.onScrub) self.onScrub([self msAtX:p.x], YES);
+        if (self.onScrubEnd) self.onScrubEnd([self msAtX:p.x]);
     }
 }
 

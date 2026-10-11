@@ -18,8 +18,12 @@
         ＋ 发光播放头；下方 当前时间 / 循环区间值 / 总时长；两端 ∓5s 菱形步进
     · 主区：左＝速度列（GeosansLight 大数字＋‹ › 箭头／音乐变速／回跳重播）
             右＝分区页签（循环·判定·解锁·网络·存储·诊断）＋ 可滚动内容
+            （网络＝开发构建专属：发布构建不渲染该页签；仅开发构建＋显式开启可用）
     · 底栏：继续（主按钮）｜复位循环（次按钮）｜版权行
   语义（保持 v3 语义，样式原生化）：
+    · 开面板**不**暂停播放；触碰时间轴＝冻结播放＋实时对齐预览（轻量定位，不走重播事务）；
+      松手＝驻停（最终目标较拖动起点回退较深时由重播引擎接管：音符重现＋该段记分清空）；
+      「继续/关闭」＝关窗并自驻停点恢复播放
     · 开关类＝行内点按切换，状态词呈现（已开亮白 / 已关暗紫灰）；动作类＝行式按钮；
       破坏性＝红字行；状态数字只进只读暗行；数值调节＝菱形 ± 步进器
     · ⓘ＝说明模式（各分区追加说明行）；长按任一行＝查看该行说明
@@ -55,18 +59,20 @@
     --deco:#8fc3c3;           /* 「开发」标记色 */
   }
   *{box-sizing:border-box;margin:0;padding:0;-webkit-user-select:none;user-select:none}
-  html,body{background:#101016;color:var(--txt);
+  html,body{background:#0b0b10;color:var(--txt);
     font:13px 'NotoSC',-apple-system,'PingFang SC',sans-serif}
-  .stage{display:flex;flex-direction:column;align-items:center;gap:14px;padding:20px 12px 30px}
+  .stage{display:flex;flex-direction:column;align-items:center;gap:12px;padding:16px 12px 26px}
+  .stagecap{font-size:11px;color:#6e6a7c;letter-spacing:.03em}
   .cap{font-size:11px;color:#6e6a7c}
   .seg{display:flex;background:#2b2736;border-radius:8px;overflow:hidden}
   .seg .opt{min-width:76px;height:26px;display:flex;align-items:center;justify-content:center;
     font-size:11px;color:#9a94aa;cursor:pointer;padding:0 12px}
   .seg .opt.sel{background:#4b4459;color:#fff}
+  body.release .tab[data-pane="net"],body.release .pane[data-pane="net"]{display:none}
 
   /* ── 手机壳（横屏 852×393） ── */
-  .phone{position:relative;width:852px;height:393px;border-radius:30px;overflow:hidden;
-    box-shadow:0 18px 50px rgba(0,0,0,.55);flex:0 0 auto}
+  .phone{position:relative;width:852px;height:393px;border-radius:24px;overflow:hidden;
+    box-shadow:0 0 0 1px rgba(255,255,255,.07),0 10px 36px rgba(0,0,0,.5);flex:0 0 auto}
   /* 模拟对局画面（设计稿衬底，非产品元素） */
   .scene{position:absolute;inset:0;background:
     radial-gradient(620px 340px at 22% 18%, rgba(178,158,232,.55), rgba(178,158,232,0) 62%),
@@ -102,8 +108,8 @@
     display:flex;align-items:center;justify-content:center;
     font:600 20px 'Exo-SemiBold';color:#fff;padding-bottom:1px}
   .dstep:active{filter:brightness(1.25)}
-  .stripwrap{flex:1;position:relative;height:42px;cursor:pointer}
-  .wave{position:absolute;inset:0;display:flex;align-items:center;gap:2px;overflow:hidden;border-radius:6px}
+  .stripwrap{flex:1;position:relative;height:46px;cursor:pointer}
+  .wave{position:absolute;inset:0;display:flex;align-items:center;gap:2px;overflow:hidden;border-radius:6px;border-bottom:1px solid rgba(255,255,255,.15)}
   .wave i{flex:0 0 2px;background:rgba(255,255,255,.24);border-radius:1px;height:30%}
   .wave i.on{background:rgba(255,255,255,.78)}
   .wave i.loop{background:rgba(214,199,246,.62)}
@@ -122,7 +128,8 @@
   .tlmeta{display:flex;align-items:baseline;gap:10px;margin-top:2px;padding:0 44px}
   .tcur{font:17px 'Exo-Regular',monospace}
   .ttot{font:17px 'Exo-Regular',monospace;color:var(--dim2)}
-  .tlmeta .mid{flex:1;text-align:center;font:12.5px 'Exo-Regular',monospace;color:var(--lav);letter-spacing:.03em}
+  .tlmeta .mid{flex:1;text-align:center;font:12.5px 'Exo-Regular',monospace;color:var(--lav);letter-spacing:.03em;transition:color .15s}
+  .tlmeta .mid.off{color:var(--dim2)}
   .tlmeta .mid b{font-family:'L2-Semibold';font-weight:600;margin:0 3px;color:#e8dffa}
 
   /* ── 主区 ── */
@@ -160,7 +167,12 @@
     font:600 13.5px 'L2-Semibold',system-ui;letter-spacing:.05em;color:rgba(226,218,242,.62)}
   .tab.sel{color:#fff;
     background:url('../../../../incoming/arcaea-7.0/ios/Payload/Arc-mobile.app/img/dialog_v2/tabs_selected.png') center/100% 100% no-repeat}
-  .panehint{flex:0 0 auto;font:11.5px 'NotoSC-Light';color:var(--dim2);padding:3px 2px 2px}
+  .panehint{flex:0 0 auto;display:flex;align-items:center;gap:10px;font:11.5px 'NotoSC-Light';color:var(--dim2);padding:3px 2px 2px}
+  .panehint .tx{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  .panehint .act{border-width:6px 9px;border-style:solid;border-color:transparent;
+    border-image:url('../../../../incoming/arcaea-7.0/ios/Payload/Arc-mobile.app/layouts/1080/pause/button.png') 11 15 11 15 fill stretch;
+    height:30px;display:none;align-items:center;justify-content:center;cursor:pointer;font:12.5px 'NotoSC';color:#fff;flex:0 0 auto;padding:0 4px}
+  .panehint .act.show{display:flex}
   .panes{flex:1 1 auto;overflow-y:auto;min-height:0;padding:2px 2px 4px}
   .panes::-webkit-scrollbar{width:3px}
   .panes::-webkit-scrollbar-thumb{background:rgba(255,255,255,.16);border-radius:2px}
@@ -226,6 +238,7 @@
     <div class="seg" id="buildSeg"><div class="opt sel" data-mode="debug">开发构建</div><div class="opt" data-mode="release">发布构建</div></div>
   </div>
 
+  <div class="stagecap">对局内：点悬浮球 → 全屏面板入场（播放照常）→ 触碰时间轴即冻结＋实时预览 → 「继续」关窗恢复　|　iPhone 15 横屏 852×393pt</div>
   <div class="phone">
     <div class="scene" id="scene"></div>
     <div class="dim"></div>
@@ -269,7 +282,7 @@
             <div class="speednum" id="spdNum">1.00</div>
             <div class="chev r" id="spdUp" title="+0.05（长按大步 +0.25）"></div>
           </div>
-          <div class="speedlbl">速度</div>
+          <div class="speedlbl">速度 · ±0.05｜长按步进 ±0.25</div>
           <div class="rowc on" id="swAudio"><span class="nm">音乐变速</span><span class="st">已开</span></div>
           <div class="rowc on" id="swReplay"><span class="nm">回跳重播</span><span class="st">已开</span></div>
           <div class="hintline"><b>音乐变速</b>＝BGM 跟随速度且保持音高（FMOD 通道速率＋移调补偿）；关＝只改谱面钟。<br>
@@ -287,7 +300,7 @@
             <div class="tab" data-pane="diag">诊断</div>
           </div>
 
-          <div class="panehint" id="paneHint">设 A/B ＝ 把当前位置记入区间；循环开 ＝ 播到 B 自动回 A；时间轴上的菱形可直接拖动改区间</div>
+          <div class="panehint"><span class="tx" id="paneHint">设 A/B ＝ 把当前位置记入区间；循环开 ＝ 播到 B 自动回 A；时间轴上的菱形可直接拖动改区间</span><span class="act" id="paneAct">应用</span></div>
 
           <div class="panes">
 
@@ -306,7 +319,6 @@
               <div class="rowc"><span class="nm">Pure</span><div class="steps stepset" data-v="50"><div class="dstep m">−</div><div class="val">50</div><div class="dstep p">+</div></div></div>
               <div class="rowc"><span class="nm">Far</span><div class="steps stepset" data-v="100"><div class="dstep m">−</div><div class="val">100</div><div class="dstep p">+</div></div></div>
               <div class="rowc"><span class="nm">Lost</span><div class="steps stepset" data-v="120"><div class="dstep m">−</div><div class="val">120</div><div class="dstep p">+</div></div></div>
-              <div class="bwrap" id="judgeApply"><div class="lb">应用</div></div>
               <div class="rowc" id="swAutoplay"><span class="nm">自动演奏</span><span class="st">已关</span></div>
               <div class="hintline"><b>自动演奏</b>＝所有判定强制 Pure（含漏扫路径），演示/练习用。</div>
             </div>
@@ -322,10 +334,11 @@
             </div>
 
             <!-- 网络 -->
-            <div class="pane" data-pane="net" data-hint="只改 API 域名（路径 / 参数原样、不动 TLS）；关掉走官方域">
+            <div class="pane" data-pane="net" data-hint="开发构建专属：仅编译时处于开发模式且显式开启本条目时可用；只改 API 域名（路径 / 参数原样、不动 TLS）">
               <div class="rowc on" id="swNet"><span class="nm">私服</span><span class="st">已开</span></div>
               <div class="rowc" id="netAddr"><span class="nm">服务端地址</span><span class="val">http://192.168.1.10:8080</span><span class="chevmark">▸</span></div>
               <div class="stat">改写 <span id="netN">21</span>/64 请求 ｜ 下载任务 2 建 / 2 完</div>
+              <div class="stat" style="color:rgba(219,199,178,.8)">私服内容的版权 / 数据处理 / 安全性由使用者自负；默认练习能力不强制绑定私服。</div>
               <div class="hintline">展开地址行可直接编辑；保存后即刻生效。</div>
             </div>
 
@@ -400,7 +413,10 @@ var BARS=160, seed=41;
 for(var i=0;i<BARS;i++){seed=seed*73%104729;
   var h=18+ (seed%54);
   if(seed%7===0) h=78;                        /* 稀疏长条＝段落感 */
-  var b=document.createElement('i'); b.style.height=h+'%'; wave.appendChild(b);}
+  var b=document.createElement('i');
+  if(i%22===0){b.style.flexBasis='7px';b.style.background='transparent';} /* 段落留白 */
+  else b.style.height=h+'%';
+  wave.appendChild(b);}
 function fmt(ms){ms=Math.max(0,Math.min(TOTAL,Math.round(ms)));
   var m=Math.floor(ms/60000), s=ms%60000, ss=Math.floor(s/1000), mmm=s%1000;
   return m+':'+String(ss).padStart(2,'0')+'.'+String(mmm).padStart(3,'0');}
@@ -416,7 +432,9 @@ function redraw(){
   band.style.left=(A*100)+'%'; band.style.width=((B-A)*100)+'%';
   document.getElementById('hA').style.left=(A*100)+'%';
   document.getElementById('hB').style.left=(B*100)+'%';
-  document.getElementById('tmid').innerHTML='<b>A</b>'+fmt(A*TOTAL)+'　<b>B</b>'+fmt(B*TOTAL);
+  var mid=document.getElementById('tmid');
+  mid.innerHTML='<b>A</b>'+fmt(A*TOTAL)+'　<b>B</b>'+fmt(B*TOTAL);
+  mid.classList.toggle('off',!loopOn);
   document.getElementById('valA').textContent=fmt(A*TOTAL);
   document.getElementById('valB').textContent=fmt(B*TOTAL);
   document.getElementById('spdNum').textContent=spd.toFixed(2);
@@ -451,7 +469,8 @@ document.querySelectorAll('#tabstrip .tab').forEach(function(t){
     t.classList.add('sel');
     document.querySelectorAll('.pane').forEach(function(p){p.classList.toggle('sel',p.dataset.pane===t.dataset.pane);});
     var pane=document.querySelector('.pane[data-pane="'+t.dataset.pane+'"]');
-    hint.textContent=pane.dataset.hint;};});
+    hint.textContent=pane.dataset.hint;
+    document.getElementById('paneAct').classList.toggle('show',t.dataset.pane==='judge');};});
 
 /* ── 开关行（名称＋状态词，点整行切换） ── */
 document.querySelectorAll('.rowc').forEach(function(r){
@@ -482,7 +501,10 @@ document.getElementById('infoBtn').onclick=function(){document.body.classList.to
 document.getElementById('closeBtn').onclick=document.getElementById('resume').onclick=function(){};
 document.querySelectorAll('#buildSeg .opt').forEach(function(o){
   o.onclick=function(){document.querySelectorAll('#buildSeg .opt').forEach(x=>x.classList.remove('sel'));
-    o.classList.add('sel');document.body.classList.toggle('release',o.dataset.mode==='release');};});
+    o.classList.add('sel');var rel=o.dataset.mode==='release';
+    document.body.classList.toggle('release',rel);
+    var netTab=document.querySelector('#tabstrip .tab[data-pane="net"]');
+    if(rel&&netTab.classList.contains('sel'))document.querySelector('#tabstrip .tab[data-pane="loop"]').click();};});
 
 redraw();
 </script>

@@ -3,7 +3,7 @@
 // 设计稿：ui-mock/panel_mock.html（v3）。结构：
 //   固定标题栏（拖动 + ⓘ说明 + ✕；标题=版本号）+ 可滚动内容区（上限 72% 屏高）；分区 =
 //   播放（时间轴/±5s/速度/音乐变速/回跳重播）｜循环（设 A/B + 开关 + 重置）
-//   ｜判定窗口（四档 + 应用 + 自动演奏）｜解锁（构建期功能集逐项显隐）｜网络（私域改写，地址折叠）
+//   ｜判定窗口（四档 + 应用 + 自动演奏）｜解锁（构建期功能集逐项显隐）｜网络（开发构建专属：私域改写，地址折叠）
 //   ｜存储（cb 外置）｜诊断（状态两行 + 开发构建专属工具区）。
 // 交互约定（与设计稿对齐）：开关=「名称+状态点」（XRCSwitchRow，tone 控色）；
 //   动作=灰底按钮；破坏性=红字靠右；状态数字只进只读行；控件一律属性引用；
@@ -73,6 +73,7 @@ static NSString *const kNoteDev =
 @property (nonatomic, assign) NSInteger lowTick;   // 低频刷新分频计数
 // 播放
 @property (nonatomic, strong) XRCTimelineView *timeline;
+@property (nonatomic, assign) uint32_t scrubStartMs;   // 拖动会话起点（回退幅度判据）
 @property (nonatomic, strong) XRCSwitchRow *swSpeedAudio;
 @property (nonatomic, strong) XRCSwitchRow *swReplay;
 @property (nonatomic, strong) UILabel *timeLabel;
@@ -212,6 +213,7 @@ static NSString *const kNoteDev =
 - (void)hide {
     [self.timer invalidate]; self.timer = nil;
     [self removeFromSuperview];
+    xrc_gameplay_pause(false);   // 「继续/关闭」的唯一语义：关窗 + 恢复播放（幂等）
     xrc_logd(XRCLC_UI, @"panel hidden");
 }
 
@@ -299,8 +301,26 @@ static NSString *const kNoteDev =
     y += secH + 4;
     UIView *c1 = [self cardAt:x0 y:y w:W];
     self.timeline = [[XRCTimelineView alloc] initWithFrame:CGRectMake(cardPad, cardPad, W - cardPad * 2, 34)];
-    self.timeline.onScrub = ^(uint32_t ms, BOOL finished) {
-        if (finished) xrc_gameplay_request(XRC_OP_SEEK, ms);
+    /* 时间轴三段式（协议见 XRCTimelineView.h / ios-panel-pause-seek-interplay 详档）：
+       按下＝冻结播放（音频 hold + 谱面钟冻结）、移动＝实时对齐预览（轻量定位）、
+       松手＝驻停；深回退（>300ms）提交显式重播事务（音符重现/该段清分）。
+       「继续/关闭」才恢复播放（hide 处释放）。开面板本身**不**暂停。 */
+    __weak typeof(self) weakTL = self;
+    self.timeline.onScrubBegin = ^{
+        __strong typeof(self) sf = weakTL; if (!sf) return;
+        if (sf.timeline.lengthMs == 0) return;   // 非对局（无曲长）：不冻结（菜单照常）
+        sf.scrubStartMs = xrc_player_position_ms();
+        xrc_gameplay_pause(true);
+    };
+    self.timeline.onScrubLive = ^(uint32_t ms) {
+        xrc_gameplay_scrub(ms);                       // 无需节流：每帧至多落一笔
+    };
+    self.timeline.onScrubEnd = ^(uint32_t ms) {
+        __strong typeof(self) sf = weakTL; if (!sf) return;
+        if (sf.timeline.lengthMs == 0) return;        // 非对局：不提交
+        if (sf.scrubStartMs > ms + 300)               // 深回退：重播引擎接管
+            xrc_gameplay_request(XRC_OP_SEEK_REPLAY, ms);
+        // 浅回退/前进：位置已由 onScrubLive 落位，驻停待「继续/关闭」
     };
     [c1 addSubview:self.timeline];
     self.timeLabel = [[UILabel alloc] initWithFrame:CGRectMake(cardPad, cardPad + 42, 160, rowH)];
@@ -503,7 +523,11 @@ static NSString *const kNoteDev =
     }        // present>0
     }        // 解锁段外层
 
-    // ============ ⑤ 网络（地址折叠） ============
+    // ============ ⑤ 网络（私服重定向）============
+    // 发布构建不含此分区（规则：只有编译时处于开发模式、且显式开启「私服」条目，
+    // 才启用该功能）。私服内容的版权 / 数据处理 / 安全性由使用者自负；
+    // 本插件默认的练习能力不强制绑定私服。
+#if XRC_DEV_SECTION
     [self sectionLabel:@"网络" hint:@"只改 API 域名，不动 TLS" x:x0 y:y w:W];
     y += secH + 4;
     UIView *c5 = [self cardAt:x0 y:y w:W];
@@ -545,6 +569,7 @@ static NSString *const kNoteDev =
     [c5 addSubview:self.netStat];
     c5.frame = CGRectMake(x0, y, W, ny + 12 + cardPad);
     y = [self note:kNoteNet afterCard:c5 x:x0 y:y w:W] + secGap;
+#endif  /* XRC_DEV_SECTION：网络分区（开发构建专属） */
 
     // ============ ⑥ 存储（外置）============
     // 纯 dylib 功能：不依赖任何二进制补丁，注入未打桩的二进制也照常可用（能力模型）。
@@ -1123,10 +1148,16 @@ static NSString *const kNoteDev =
         NSMutableArray *absent = [NSMutableArray array];
         for (NSString *ft in all)
             if (!xrc_feature_present(ft.UTF8String)) [absent addObject:ft];
+        NSString *netCap =
+#if XRC_DEV_SECTION
+            @" 网络✓";
+#else
+            @"";        /* 发布构建不含私服重定向（见 XRCNet.h 规则注释） */
+#endif
         self.patchLine.text = [NSString stringWithFormat:
-            @"能力：桩%@ 播放器%@ gp%@ 变速✓ 网络✓ ｜ 未含：%@",
+            @"能力：桩%@ 播放器%@ gp%@ 变速✓%@ ｜ 未含：%@",
             xrc_cap_stub() ? @"✓" : @"✗", xrc_cap_player() ? @"✓" : @"✗",
-            xrc_cap_gp() ? @"✓" : @"✗",
+            xrc_cap_gp() ? @"✓" : @"✗", netCap,
             absent.count ? [absent componentsJoinedByString:@","] : @"(无)"];
     }
 #if XRC_DEV_SECTION

@@ -186,3 +186,24 @@ bool xrc_player_pause(bool paused) {
     if (!fn) return false;
     return fn(self, paused ? 1 : 0, 0) == 0;
 }
+
+// 暂停持有计数（多来源共用；单一实现在此，理由见头文件注释）。
+static _Atomic(int) s_pause_holds = 0;
+bool xrc_player_pause_hold(bool hold) {
+    if (hold) {
+        int prev = atomic_fetch_add(&s_pause_holds, 1);
+        if (prev == 0) {
+            bool ok = xrc_player_pause(true);
+            if (!ok) atomic_fetch_sub(&s_pause_holds, 1);   /* 暂停失败：不虚占计数 */
+            return ok;
+        }
+        return true;                                        /* 已暂停：计数即可 */
+    }
+    int prev = atomic_fetch_sub(&s_pause_holds, 1);
+    if (prev <= 0) {                                        /* 未持有：无害空操作 */
+        atomic_store(&s_pause_holds, 0);
+        return false;
+    }
+    if (prev == 1) return xrc_player_pause(false);          /* 最后一个持有者：恢复 */
+    return true;
+}

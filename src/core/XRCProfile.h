@@ -364,6 +364,22 @@
 #define XRC_NOTE_HELD_OFF      (168)           // note+0xA8 bit0 = "被接住/保持中"（sub_10091E58C 与尾部时刻
                                                // 联合读取；外部参考实现 hold 分支每帧置 1——不写则长条显示为未接住）
 
+// ---------------- 弧「判定面残点」（height_indicator）----------------
+// 症状：回跳重放后，弧与判定面接触处残留一个点（矮光柱快照）。
+// 机制（出处 research/notes/ios-7.0.255-04-arc-indicator-seek.md，2026-10-02 静态定案）：
+//   指示器 = 弧**首段** ArcSegment 上的 height_indicator 精灵（每弧最多一个，AFDD64 的
+//   `if (a6)` i==0 门）；形状 = 子精灵顶点区 4×12B 的快照，唯一写者 sub_100AFE624
+//   （创建尾 / 头段摆位）；可见性随父段、自身无 setVisible 路径 ⇒ 「快照几何 + 单向棘轮」
+//   ⇒ 回跳后没有任何路径把旧快照翻篇 = 残点。
+// 清理（方案 1，幂等）：4 组顶点清零 = 回到引擎 ctor bzero 的「从未写过」态；凡「该显示」
+//   的时刻（创建 / 头段摆位）引擎自己会重写 ⇒ 自愈。不写可见性位、不碰任何 seg 字段。
+#define XRC_ARC_SEG_CONTAINER_OFF   0x278      // RenderArcNote+0x278 = 段容器节点（vt[68] 返回子表）
+#define XRC_ARC_SEG_INDICATOR_OFF   0x290      // ArcSegment+0x290 = height_indicator 精灵（AFDD64 @0x100AFE534）
+#define XRC_ARC_IND_QUAD0_OFF       0x39C      // 指示器精灵顶点组 ×4（AFE624 写点；12B/组）
+#define XRC_ARC_IND_QUAD1_OFF       0x3B4
+#define XRC_ARC_IND_QUAD2_OFF       0x3CC
+#define XRC_ARC_IND_QUAD3_OFF       0x3E4
+
 // ---------------- OnlineManager 探针 / applog 强发（XRCOMLog）----------------
 // 出处: 真机内存转储 + 静态复核。
 //   vtable: 0x10149C100 起（[0]=offset-to-top=0、[8]=typeinfo、0x10149C110 起为槽 0）；

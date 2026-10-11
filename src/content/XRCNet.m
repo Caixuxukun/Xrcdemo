@@ -122,6 +122,12 @@ static void s_diag_dispatch(void) {
 }
 
 void xrc_net_set_enabled(bool on) {
+#if !XRC_DEBUG_BUILD
+    /* 发布构建：私服功能整体不可用（规则单一出处 = XRCNet.h 文件头）。
+       这里再拦一道，防任何漏网的调用点（安装点已在 Tweak.x 编译期剔除）。 */
+    if (on) xrc_logw(XRCLC_BOOT, @"[net] 发布构建不包含私服功能：忽略启用请求");
+    on = false;
+#endif
     bool was = atomic_exchange(&s_enabled, on);
     if (on && !was) s_diag_dispatch();   // 开启瞬间做一次自检
 }
@@ -583,6 +589,9 @@ static void s_install_redirect_hook(void) {
 }
 
 void xrc_net_install(void) {
+#if !XRC_DEBUG_BUILD
+    return;   /* 发布构建：不安装（规则见 XRCNet.h 文件头） */
+#endif
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         s_match = s_default_match();

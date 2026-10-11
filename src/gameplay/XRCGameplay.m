@@ -53,6 +53,15 @@ bool xrc_gameplay_request(xrc_op_t op, uint32_t param_ms) {
     }
     uint32_t cur = atomic_load(&s_pending_op);
     if (cur != XRC_OP_NONE) {
+        /* 同族（seek / 回位）后到者**覆盖**前项：拖动提交/循环回位在冷却窗口内
+           可能连来两笔——若拒绝后到者，冷却结束后会按**旧目标**执行，把用户
+           拉回上一个位置。最后一次意愿为准。 */
+        if (op == XRC_OP_SEEK || op == XRC_OP_SEEK_REPLAY || op == XRC_OP_LOOP_REWIND) {
+            atomic_store(&s_pending_scene, (uint64_t)scene);
+            atomic_store(&s_pending_ms, param_ms);
+            atomic_store(&s_pending_op, op);
+            return true;
+        }
         xrc_logd(XRCLC_JUDGE, @"request rejected: pending op=%u", cur);
         return false;
     }
@@ -72,6 +81,8 @@ static void *s_valid_note_group(void *scene) {
     if (!clk) return NULL;
     return ng;
 }
+
+
 
 // ---- retry 监视器 ----
 // 场景：开启循环或 seek 定位后，游戏中暂停 → Retry（引擎重建场景）。
@@ -182,7 +193,7 @@ void xrc_freeze_end(void) {
             xrc_logd(XRCLC_JUDGE, @"冻结窗收口：pos=%d 未落位（target=%d）——本次不平移，交给收敛窗", pos, tgt);
         }
     }
-    xrc_player_pause(false);
+    xrc_player_pause_hold(false);   /* 持有计数释放：面板「练习暂停」仍持有时不恢复音频 */
     xrc_clock_freeze_dec();
     atomic_store(&s_frz_deadline_us, xrc_real_now_us() + XRC_RESYNC_US);
     atomic_store(&s_frz_state, XRC_FRZ_RESYNC);
@@ -194,7 +205,7 @@ static void s_frz_tick(void *note_group) {
     int st = atomic_load(&s_frz_state);
     if (st == XRC_FRZ_OFF) return;
     if (!note_group) {
-        xrc_player_pause(false);
+        xrc_player_pause_hold(false);
         xrc_clock_freeze_dec();
         atomic_store(&s_frz_state, XRC_FRZ_OFF);
         return;
@@ -226,6 +237,71 @@ static void s_frz_tick(void *note_group) {
                      dpos <= 300 ? "已落位" : "超时未落位");
         }
     }
+}
+
+// XRCReplay 导出（暂停驻停提交用）
+extern void xrc_replay_request_reset(uint32_t T);
+
+#pragma mark - 练习暂停 / 拖动 seek
+
+// 练习暂停（面板开 = 暂停）：音频持有计数 + warp 冻结计数的组合。
+// 语义与边界（细粒度排查见 research/notes/ios-panel-pause-seek-interplay-2026-10-11.md）：
+//   · 与 seek 冻结窗**可共存**：两边各持一份音频 hold 与 freeze 计数，互不误解除；
+//   · 暂停期间循环 tick 抑制（s_practice_paused 门控在 xrc_gameplay_update 里）——
+//     拖动浏览越过了 B 点也不会被自动回位打断；
+//   · 卡死监视/retry 监视天然豁免（钟静止=暂停态；自家 seek 有 own-seek 标记）；
+//   · retime 在冻结计数>0 时自动跳过（暂停不该被 retime 补差）。
+static _Atomic(int)      s_practice_paused = 0;
+static _Atomic(uint32_t) s_scrub_ms   = 0;
+static _Atomic(int)      s_scrub_pend = 0;
+static _Atomic(uint64_t) s_scrub_us   = 0;      // 最近一次拖动落笔（真实时间）
+
+void xrc_gameplay_pause(bool on) {
+    int prev = atomic_exchange(&s_practice_paused, on ? 1 : 0);
+    if (prev == (on ? 1 : 0)) return;                     /* 幂等 */
+    if (on) {
+        xrc_player_pause_hold(true);
+        xrc_clock_freeze_inc();
+        xrc_logd(XRCLC_JUDGE, @"练习暂停：开（音频 hold + 钟冻结，freeze=%d）",
+                 xrc_clock_freeze_count());
+    } else {
+        xrc_clock_freeze_dec();
+        xrc_player_pause_hold(false);
+        xrc_logd(XRCLC_JUDGE, @"练习暂停：关（钟解冻 + 音频 hold 释放）");
+    }
+}
+
+uint64_t xrc_gameplay_scrub_us(void) { return atomic_load(&s_scrub_us); }
+
+// 拖动 seek 受理（UI 线程只登记；落笔在下一帧 gp.update，与游戏 tick 串行）。
+bool xrc_gameplay_scrub(uint32_t ms) {
+    if (!atomic_load(&xrc_gp_instance)) return false;
+    atomic_store(&s_scrub_ms, ms);
+    atomic_store(&s_scrub_pend, 1);
+    return true;
+}
+
+// 拖动落笔（gp.update 内、s_exec_pending 之前）：轻量「音频 seek + base 平移」。
+// 不开冻结窗、不触发重播、不受冷却/去抖限制——每帧至多一笔，UI 无需节流。
+static void s_scrub_tick(void *self) {
+    if (!atomic_load(&s_scrub_pend)) return;
+    atomic_store(&s_scrub_pend, 0);
+    if (atomic_load(&s_frz_state)) return;      /* 事务进行中：本次忽略，下一次移动即恢复 */
+    uint32_t ms = atomic_load(&s_scrub_ms);
+    void *ng = s_valid_note_group(self);
+    if (!ng) return;
+    int32_t cur = xrc_chart_clock_ms(ng);
+    if (cur < 0) return;                        /* 前导/加载中：拖动无意义 */
+    uint32_t dur = xrc_player_song_length_ms();
+    if (dur && ms > dur) ms = dur;
+    void *player = xrc_player_get();
+    if (player) {
+        xrc_player_seek_ms(player, ms);
+        atomic_store(&s_own_seek_us, xrc_real_now_us());   /* retry 监视豁免 */
+    }
+    xrc_clock_shift_to(ng, (int32_t)ms);
+    s_gp_last_real_us = 0;                      /* 钟被移动：retime 基准作废 */
+    atomic_store(&s_scrub_us, xrc_real_now_us());
 }
 
 // 在游戏循环内执行 pending（self = 当前活场景）。
@@ -300,7 +376,9 @@ static void s_exec_pending(void *self) {
             if (dur && ms > dur) ms = dur;
         }
         // ③ 方向判定：回退幅度超过快路径检测阈（300ms）⇒ 预期触发回跳重置 ⇒ 全程冻结。
-        int frz = ((cur_ms - (int32_t)ms) > 300);
+        // **练习暂停（拖动会话/驻停）期间跳过冻结窗**：钟已被暂停钉住、音频已被 hold，
+        // 再开窗只会多一层计数与收敛窗扰动；重播事务由提交侧显式触发（见下）。
+        int frz = ((cur_ms - (int32_t)ms) > 300) && !atomic_load(&s_practice_paused);
 
         // 音频 seek（player 可能已换歌，重新取）
         void *player = xrc_player_get();
@@ -309,7 +387,7 @@ static void s_exec_pending(void *self) {
             int32_t pos_before = (int32_t)xrc_player_position_ms();
             if (frz) {
                 xrc_clock_freeze_inc();          // 停 retime（它写 base）
-                xrc_player_pause(true);          // 音频暂停（外部参考实现拖动暂停的最小化版）
+                xrc_player_pause_hold(true);     // 音频暂停（持有计数：与面板「练习暂停」共存，见头文件）
             }
             xrc_player_seek_ms(player, ms);
             /* 给 watcher 记一笔「这一跳是我们自己干的」（音频下一帧才落位，
@@ -338,7 +416,13 @@ static void s_exec_pending(void *self) {
         }
     }
 
-    if (op == XRC_OP_SEEK_REPLAY || op == XRC_OP_LOOP_REWIND) {
+    if (op == XRC_OP_SEEK_REPLAY) {
+        /* 暂停驻停提交：**显式触发**重播事务——暂停态下钟不再动，自动检出要等
+           拖动豁免窗（500ms）过期且依赖时序，慢且脆；这里直接走同一入口，
+           并由 xrc_replay_request_reset 把水位线消化到 T（防检出双触发）。 */
+        xrc_replay_request_reset(ms);
+        xrc_logd(XRCLC_JUDGE, @"replay commit (paused park): T=%u", ms);
+    } else if (op == XRC_OP_LOOP_REWIND) {
         // 音频基准不在这里对齐（seek 后立即读是旧值）；冻结窗/收敛窗收口时已对齐。
         xrc_logd(XRCLC_JUDGE, @"replay executed via seek (op=%u)", op);
     }
@@ -480,8 +564,11 @@ void xrc_gameplay_update(void *self, uint64_t a2, uint64_t a3, uint64_t a4, uint
             int32_t pos = xrc_chart_clock_ms(note_group);
             // 冻结/收敛窗内钟不是真实播放时间（钉住/落位中）——循环 tick 抑制，
             // 防事务中间态二次触发回跳（收口缺守卫会把钟弹回旧位 → 循环二跳）。
-            if (pos > 0 && !atomic_load(&s_frz_state)) xrc_loop_tick(self, (uint32_t)pos);
+            // 练习暂停（面板开）期间同样抑制：拖动浏览越过 B 点不应被自动回位打断。
+            if (pos > 0 && !atomic_load(&s_frz_state) && !atomic_load(&s_practice_paused))
+                xrc_loop_tick(self, (uint32_t)pos);
         }
+        s_scrub_tick(self);     // 拖动 seek 落笔（轻量对齐；先于常规 deferred 操作）
         s_exec_pending(self);   // deferred 操作（seek/循环回位）在活场景循环内执行
 
         // retry 监视（音频回跳）；循环卡死恢复。
@@ -581,14 +668,16 @@ void xrc_gameplay_displaylink_common_install(void) {
  *
  * 循环开关：面板「循环 开/关」（区间完整才允许开启）。
  *
- * 到 B 点（循环开）：deferred seek 平移回 A（练习定位语义：已判音符不
- *   重现、计分不回滚；不触碰游戏状态机，无卡死风险）。
+ * 到 B 点（循环开）：deferred seek 平移回 A。回退一旦被检出（XRCReplay 的
+ *   50ms 水位线回落 >300ms），重播引擎在冻结窗内接管（清分→清消费→复活→
+ *   重建；语义见 XRCReplay.m 文件头）：音符重现、该段记分清空。
+ *   「回跳重播」总门（s_arm_on）关闭时，回跳退化为纯 seek 平移。
  *
  * 手动 Retry（游戏原生重建，安全）：重建后音频回跳（>-10s）被检测 →
  *   **仅当循环开启**时 seek 回 A；未开循环则不干预。
  *
  * 程序化 retry：不可用（重触发会污染 GameModel action 队列致卡死），
- *   本插件不做；路径记录见 XRCProfile.h 的 retry 触发链注释段。
+ *   本工具不做；路径记录见 XRCProfile.h 的 retry 触发链注释段。
  * ──────────────────────────────────────────────────────────────── */
 
 /*
@@ -596,13 +685,13 @@ void xrc_gameplay_displaylink_common_install(void) {
  *
  * 【A-B 循环练习】
  *   用户流程：播放到起点按「起点」→ 播放到终点按「终点」→ 开「循环」。
- *   到 B 点 → deferred seek 平移回 A（音频 seek + 谱面钟 base 平移）。
- *   语义：练习定位——已判音符不重现、计分不回滚（不触碰游戏状态机、
- *   无卡死风险）。
+ *   到 B 点 → deferred seek 平移回 A → 回退被重播引擎（XRCReplay）接管：
+ *   音符重现、该段记分清空。「回跳重播」开关 = 重播引擎总门；关闭时回跳
+ *   退化为纯 seek 平移（音符不重现、计分不回滚，不触碰游戏状态机）。
  *
- * 【完整重打（音符重现）】
- *   用户暂停菜单自行 Retry（游戏原生重建链，安全），重建后音频回跳检测
- *   随即把进度拉回 A（retry detected -> seek A）。
+ * 【手动 Retry（游戏原生重建，安全）】
+ *   用户从暂停菜单自行 Retry（游戏原生重建链），重建后音频回跳检测把
+ *   进度拉回 A（retry detected -> seek A）——仅循环开启时执行。
  *
  * 【程序化 retry（禁止调用）】
  *   触发调用被游戏静默忽略（Retry 回调首校验 PauseLayer+0x298==1），

@@ -175,13 +175,18 @@ static void doBootstrap(void) {
         // BRK 桩：处理器已在 %ctor 装好，这里只注册桩点（见 XRCProfile.h）。
         @try { xrc_brk_setup(base); }           @catch (NSException *e) { xrc_logw(XRCLC_BOOT, @"brk EX: %@", e); }
         xrc_apply_switches();   // 开关统一入口（%ctor 已调过一次；此处幂等刷新）
-        // 私服重定向：NSURLConnection 层改写 URL（不改 TLS；换域后 pin 自然放行）
+        // 私服重定向（开发构建专属）：NSURLConnection 层改写 URL（不改 TLS；换域后 pin 自然放行）。
+        // 规则：发布构建（默认编译）不包含本功能；只有编译时处于开发模式、且显式开启
+        //      「私服」条目，才启用。私服内容的版权 / 数据处理 / 安全性由使用者自负；
+        //      本插件默认的练习能力不强制绑定私服。规则注释的单一出处见 XRCNet.h。
+#if XRC_DEBUG_BUILD
         @try {
             xrc_net_install();
             xrc_net_set_base(g_cfg.net_base ? g_cfg.net_base.UTF8String : NULL);
             xrc_net_set_match(g_cfg.net_match ? g_cfg.net_match.UTF8String : NULL);
             xrc_net_set_enabled(g_cfg.net_enabled);
         } @catch (NSException *e) { xrc_logw(XRCLC_BOOT, @"net EX: %@", e); }
+#endif
         @try {
             static dispatch_once_t tw_once;
             dispatch_once(&tw_once, ^{

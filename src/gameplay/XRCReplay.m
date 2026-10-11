@@ -234,6 +234,7 @@ static int rpf_note_consumed(uint64_t note) {
 extern void xrc_arc_nohide_set(int on);   // XRCHook 导出
 extern void xrc_ap_latch_reset(void);     // XRCHook 导出
 extern void xrc_freeze_end(void);         // XRCGameplay 导出
+extern uint64_t xrc_gameplay_scrub_us(void);   // XRCGameplay 导出（拖动 seek 豁免窗）
 
 // ---- 开关与状态（默认 = 已验证配置） ----
 static int s_arm_on;                              /* 回跳重播总门（xrc_replay_set_enabled 控制） */
@@ -969,6 +970,75 @@ typedef struct {
 #define RPF_RM_REG_END   0x380ULL
 typedef void (*xrc_line_t)(void *render_note);
 
+// ---- 弧「判定面残点」（height_indicator）清零 ----
+// 机制与设计定案：research/notes/ios-7.0.255-04-arc-indicator-seek.md（2026-10-02；
+// 偏移登记见 XRCProfile.h「弧判定面残点」段）。
+// 指示器 = 弧首段 ArcSegment 上的 height_indicator 精灵（seg+0x290；每弧最多一个）；
+// 形状 = 子精灵顶点区 4×12B 的快照（唯一写者 sub_100AFE624：创建尾 / 头段摆位）；
+// 可见性随父段、自身无 setVisible 路径 ⇒「快照几何 + 单向棘轮」：回跳后一笔贴在
+// 判定面上的旧快照没有任何路径翻篇 = 残点。清零 = 回到引擎 ctor bzero 的「从未写过」
+// 态；凡「该显示」的时刻引擎自己会重写（创建 / 头段摆位）⇒ 自愈。
+// **不写可见性位、不碰任何 seg 字段（尤其 seg+0x298 是指针）。**
+static bool rpf_zero12(uint64_t addr) {
+    if (!addr) return false;
+    static uint8_t z[12];                       /* 静态零初始化 */
+    kern_return_t kr = vm_write(mach_task_self(), (vm_address_t)addr,
+                                (vm_offset_t)z, (mach_msg_type_number_t)sizeof(z));
+    return kr == KERN_SUCCESS;
+}
+
+// 对一个 RenderArcNote 渲染对象：把每个分段指示器的 4 组顶点清零。返回清到的段数。
+// 校验链照 rpf_reshow_arc_children 的形状：逐层 s_isptr + 形状自证；无指示器（非首段 /
+// 带天键弧 / 恒定高度弧）天然跳过 ⇒ 幂等。
+static int rpf_arc_indicator_clear_one(uint64_t rn) {
+    uint64_t node = 0;
+    if (!rd(rn + XRC_ARC_SEG_CONTAINER_OFF, &node, 8) || !s_isptr(node)) return -1;
+    uint64_t nvt = 0, fn = 0;
+    if (!rd(node, &nvt, 8) || !s_isptr(nvt)) return -1;
+    if (!rd(nvt + 544, &fn, 8) || !s_isptr(fn)) return -1;      /* vt[68] = 取子表 */
+    uint64_t list = ((rpf_get68_t)fn)(node);
+    if (!s_isptr(list)) return -1;
+    uint64_t b = 0, e = 0;
+    if (!rd(list, &b, 8) || !rd(list + 8, &e, 8)) return -1;
+    if (!s_isptr(b) || !s_isptr(e) || e < b || (e - b) > 0x4000 || ((e - b) % 8)) return -1;
+    int n = 0;
+    for (uint64_t p = b; p < e; p += 8) {
+        uint64_t seg = 0, ind = 0;
+        if (!rd(p, &seg, 8) || !s_isptr(seg)) continue;
+        if (!rd(seg + XRC_ARC_SEG_INDICATOR_OFF, &ind, 8) || !s_isptr(ind)) continue;
+        if (rpf_zero12(ind + XRC_ARC_IND_QUAD0_OFF) && rpf_zero12(ind + XRC_ARC_IND_QUAD1_OFF) &&
+            rpf_zero12(ind + XRC_ARC_IND_QUAD2_OFF) && rpf_zero12(ind + XRC_ARC_IND_QUAD3_OFF))
+            n++;
+    }
+    return n;
+}
+
+// 遍历渲染注册表（mgr+0x378..+0x380）对**全部** RenderArcNote 清一次 —— 新旧对象都清：
+// 新对象带「创建快照」的残点，旧对象（重建关时的兜底）带「穿面一刻」的残点，一次覆盖。
+static void rpf_arc_indicator_reset_all(uint64_t mgr) {
+    if (!s_ishp(mgr)) return;
+    uint64_t rb = 0, re = 0;
+    if (!rd(mgr + RPF_RM_REG_BEGIN, &rb, 8) || !rd(mgr + RPF_RM_REG_END, &re, 8)) return;
+    if (!s_ishp(rb) || !s_ishp(re) || re < rb) return;
+    long n = (long)((re - rb) / 8);
+    if (n <= 0 || n > 8192) return;
+    int narc = 0, nseg = 0;
+    for (long i = 0; i < n; i++) {
+        uint64_t rn = 0, rvt = 0;
+        if (!rd(rb + 8 * (uint64_t)i, &rn, 8) || !s_ishp(rn)) continue;
+        if (!rd(rn, &rvt, 8) || !s_isptr(rvt)) continue;
+        char nm[96];
+        rpf_class_name(rvt, nm, sizeof(nm));
+        if (!strstr(nm, "RenderArc") || strstr(nm, "ArcTap")) continue;   /* 锁定 RenderArcNote */
+        narc++;
+        int k = rpf_arc_indicator_clear_one(rn);
+        if (k > 0) nseg += k;
+    }
+    xrc_logd(XRCLC_JUDGE, @"[rpf] ◎I 指示器清点：RenderArcNote=%d 段=%d 清 quad=%d",
+             narc, nseg, nseg * 4);
+}
+
+
 static void rpf_freeze_end(void);   /* 前向声明（定义在 reset_job 段；重建链末尾收口用） */
 
 static void rpf_rebuild_main(void *ctx) {
@@ -1011,6 +1081,9 @@ static void rpf_rebuild_main(void *ctx) {
             }
             xrc_logd(XRCLC_JUDGE, @"[rpf] ⟲⟲⟲ 连线补齐（补齐域 %ld..%ld）：%d 条", n0, n1, nline);
         }
+        /* 弧判定面残点：重建/连线补齐之后、冻结窗收口之前，对**全部** RenderArcNote
+           的分段指示器顶点清零（新旧对象都清、幂等；机制见 rpf_arc_indicator_reset_all 上方）。 */
+        rpf_arc_indicator_reset_all(mgr);
     }
     /* 本任务（重建/连线补齐）是重置链最后一棒 ⇒ 冻结窗收口（恢复音频 + 收敛窗）。
        若外层当前没有冻结窗，xrc_freeze_end 是空操作（幂等）。 */
@@ -1282,7 +1355,7 @@ static void rpf_reset(uint64_t ng, uint32_t T, uint32_t P) {
     // **长条/弧的触摸态清理**（机制见 rpf_clear_touch_state 上方注释）——
     // 这是"渲染时机和状态不对"的正解。
     if (s_do_write) {
-        int nnote = 0, nfield = 0, nvd = 0, nsegv = 0, nseg = 0;
+        int nnote = 0, nfield = 0, nvd = 0, nsegv = 0, nseg = 0, nind = 0;
         s_cpos_restored = 0;
         /* 目标集**现场取**（同 rpf_collect_live），不用 s_reg[] 快照：
            "vtable 与快照一致"挡不住**同类对象复用**（复用后 vtable 一模一样）。 */
@@ -1312,11 +1385,19 @@ static void rpf_reset(uint64_t ng, uint32_t T, uint32_t P) {
                 if (!s_rebuild_on && strstr(nm2, "Arc") && !strstr(nm2, "ArcTap")) {
                     int sg = rpf_reshow_arc_children(note, nsegv < 4, 1);
                     if (sg > 0) { nseg += sg; nsegv++; }
+                    /* 弧判定面残点——重建关时的兜底（重建开时由重建链尾部统一清，见
+                       rpf_arc_indicator_reset_all）：把该弧分段指示器顶点清零（幂等）。 */
+                    uint64_t rp = 0;
+                    if (rd(note + 0x40, &rp, 8) && s_isptr(rp)) {
+                        int iq = rpf_arc_indicator_clear_one(rp);
+                        if (iq > 0) nind += iq;
+                    }
                 }
             }
         }
         xrc_logd(XRCLC_JUDGE, @"[rpf] ⟲⟲⟲ 触摸态：%d 条长条/弧有残留，清掉 %d 处 ｜ 弧造型子节点显回 %d 个"
-               " ｜ 其中坐标写回原始曲线的 %d 个", nnote, nfield, nseg, s_cpos_restored);
+               " ｜ 其中坐标写回原始曲线的 %d 个 ｜ 指示器残点清 %d 段",
+               nnote, nfield, nseg, s_cpos_restored, nind);
     }
 
     if (s_do_write) { rpf_tree_check(ng, "运行期态/重登记后"); }
@@ -1622,10 +1703,15 @@ static void rpf_fast_tick(void) {
             //   回绕成 9 ⇒ 每首歌的前导期都会被误判成回跳。有符号下
             //   `-291 + 300 = 9 < -341` 为假；真正的回跳（30000 → 0）`0 + 300 < 30000` 仍为真。
             int32_t dnow = (int32_t)now, dwm = (int32_t)s_seek_wm;
-            /* 垃圾闸门：退场/过场时引擎字段会读成亿级野值——在垂死的场景上跑带垃圾 P 的
-               重置有污染下一首的风险。只采信 [-60s, 10min] 内的读数；野值不更新
-               水位线、不检出。 */
-            if (dnow < -60000 || dnow > 600000) {
+            /* 拖动 seek（实时对齐预览）会话：钟在跟随手指移动 —— **水位线冻结 + 不检出**，
+               否则快速拖动会被当成回跳、在拖动中途触发重播事务（冻结窗把钟钉死、打断拖动）。
+               松手后由提交/检出按最终目标走常规路径；豁免窗 = 最近一次拖动落笔后 500ms。 */
+            if (xrc_real_now_us() - xrc_gameplay_scrub_us() < 500000ULL) {
+                /* 拖动中：不动水位线、不检出 */
+            } else if (dnow < -60000 || dnow > 600000) {
+                /* 垃圾闸门：退场/过场时引擎字段会读成亿级野值——在垂死的场景上跑带垃圾 P 的
+                   重置有污染下一首的风险。只采信 [-60s, 10min] 内的读数；野值不更新
+                   水位线、不检出。 */
                 /* 野值：忽略 */
             } else if (s_seek_wm && dnow + 300 < dwm) {
                 xrc_logd(XRCLC_JUDGE, @"[rpf] ⟲ 检出回跳：%d → %d（回落 %d ms）ng 已稳定 %d 拍",
@@ -1650,6 +1736,21 @@ static void rpf_fast_tick(void) {
             }
         }
     }
+}
+
+// 显式重播请求（暂停驻停提交用）——与自动检出同一入口，但由调用方给目标 T。
+// 语义：P = 当前水位线（回跳前的高水位；无则取 T）；随后把水位线**消化**到 T
+// （防自动检出对同一次回跳再触发一遍）。总门关 / 目标越界 / 场景无效 = 无害空操作。
+void xrc_replay_request_reset(uint32_t T) {
+    if (!s_arm_on) { xrc_logd(XRCLC_JUDGE, @"[rpf] 显式重播请求被忽略（总门关）"); return; }
+    if (T >= 3600000) return;
+    uint64_t scene = xrc_gameplay_instance();
+    uint64_t ng = 0;
+    if (!scene || !rd(scene + RPF_NOTEGRP, &ng, 8) || !s_ishp(ng)) return;
+    uint32_t P = s_seek_wm ? s_seek_wm : T;
+    s_seek_wm = T;
+    xrc_logd(XRCLC_JUDGE, @"[rpf] ⟲ 显式重播请求（暂停驻停提交）：T=%u P=%u", T, P);
+    rpf_reset_dispatch(ng, T, P);
 }
 
 // ---------------------------------------------------------------- 常驻线程与对外接口

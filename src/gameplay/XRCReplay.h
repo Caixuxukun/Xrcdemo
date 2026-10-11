@@ -15,3 +15,8 @@ void xrc_replay_start(void);
 // 回跳重播总门（默认关；面板开关驱动）。
 void xrc_replay_set_enabled(bool on);
 bool xrc_replay_enabled(void);
+
+// 显式重播请求（暂停驻停提交用）：由调用方给目标 T（ms）。
+// 与自动检出同一入口；P 取当前水位线（回跳前高水位），随后水位线消化到 T
+// ——防自动检出对同一次回跳再触发一遍。总门关闭/目标越界/场景无效时为无害空操作。
+void xrc_replay_request_reset(uint32_t T);
