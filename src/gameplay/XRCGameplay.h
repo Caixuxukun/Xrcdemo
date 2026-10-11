@@ -53,6 +53,9 @@ bool xrc_gameplay_scrub(uint32_t ms);
 // 最近一次拖动落笔的真实时间（us）。XRCReplay 用它做检出豁免窗。
 uint64_t xrc_gameplay_scrub_us(void);
 
+// 是否处于对局中（场景活 + note 组 + 谱面钟三者齐备）。UI 用它区分菜单/对局。
+bool xrc_gameplay_in_song(void);
+
 // 当前 pending 状态（UI 显示/防重入用）。
 
 // 读取谱面钟当前值（按 XRCProfile 的 clock 布局）。

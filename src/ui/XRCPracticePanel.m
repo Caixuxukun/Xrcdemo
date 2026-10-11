@@ -308,7 +308,7 @@ static NSString *const kNoteDev =
     __weak typeof(self) weakTL = self;
     self.timeline.onScrubBegin = ^{
         __strong typeof(self) sf = weakTL; if (!sf) return;
-        if (sf.timeline.lengthMs == 0) return;   // 非对局（无曲长）：不冻结（菜单照常）
+        if (!xrc_gameplay_in_song()) return;     // 非对局（菜单）：不冻结（timeline 在菜单里有占位长度，用它判不对）
         sf.scrubStartMs = xrc_player_position_ms();
         xrc_gameplay_pause(true);
     };
@@ -317,7 +317,7 @@ static NSString *const kNoteDev =
     };
     self.timeline.onScrubEnd = ^(uint32_t ms) {
         __strong typeof(self) sf = weakTL; if (!sf) return;
-        if (sf.timeline.lengthMs == 0) return;        // 非对局：不提交
+        if (!xrc_gameplay_in_song()) return;          // 非对局：不提交
         if (sf.scrubStartMs > ms + 300)               // 深回退：重播引擎接管
             xrc_gameplay_request(XRC_OP_SEEK_REPLAY, ms);
         // 浅回退/前进：位置已由 onScrubLive 落位，驻停待「继续/关闭」

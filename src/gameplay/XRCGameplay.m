@@ -276,6 +276,10 @@ uint64_t xrc_gameplay_scrub_us(void) { return atomic_load(&s_scrub_us); }
 // 拖动 seek 受理（UI 线程只登记；落笔在下一帧 gp.update，与游戏 tick 串行）。
 bool xrc_gameplay_scrub(uint32_t ms) {
     if (!atomic_load(&xrc_gp_instance)) return false;
+    /* 拖动 = 冻结的不变量：受理即确保暂停（幂等）。调用方（面板三段式）在按下时
+       已调 pause(true)；这里是防未来调用方漏调的第一道保险——拖动绝不能在
+       "播放中"发生（步进的钟平移会让引擎把路过的音符逐个判成 LOST）。 */
+    if (!atomic_load(&s_practice_paused)) xrc_gameplay_pause(true);
     atomic_store(&s_scrub_ms, ms);
     atomic_store(&s_scrub_pend, 1);
     return true;
@@ -302,6 +306,110 @@ static void s_scrub_tick(void *self) {
     xrc_clock_shift_to(ng, (int32_t)ms);
     s_gp_last_real_us = 0;                      /* 钟被移动：retime 基准作废 */
     atomic_store(&s_scrub_us, xrc_real_now_us());
+}
+
+// ---- 暂停护栏（练习暂停期间的引擎判定总闸 + 路过跳过 + 冻结看护）----
+// 机制出处（sub_10091BC44 反汇编，.idamcp/_c70_10091BC44.c；偏移登记见 XRCProfile.h）：
+//   · L209：`if(!(ng+312&1)) { if(!(ng+313&1)) sub_10091D2F4; sub_10091D9A0; }`
+//     ⇒ ng+312 bit0 = 「判定 + 自动漏扫」块总闸；入场/位置刷新（L183 sub_10091C47C）
+//     无门控 ⇒ 关闸不影响拖动预览。
+//   · 为什么必须关：拖动把谱面钟按步平移，引擎每帧在**新位置**上跑"入场 + 漏扫"——
+//     每一步刚入场的音符 end < cur ⇒ 当场被判 LOST（真机"一大屏 lost 卡在判定面"，
+//     且冻结时特效计时不走、LOST 不淡出）。312 无运行期写者 ⇒ 断言写 1 安全；
+//     仍按「保存-恢复 + 每帧断言 + 防场景重建（换 ng）」的纪律处理。
+//   · 路过跳过：暂停期间把**窗口内已越过的未消费音符**按引擎自己的快进语义标记
+//     "跳过"（vtable idx7 = 写 note+0x0C=1；引擎快进 sub_1009204E4 同款调用）——
+//     否则恢复播放瞬间会对被"路过"的音符补一波 miss。排除 SceneControl（谱面命令，
+//     标它不是"跳过"是"吞指令"）。
+//   · 冻结看护：驻停期间冻结计数被**任何来源**误扣到 0 就当场补回并留痕——
+//     防真机"谱面开始动、音频还停着"（冻结/音频持有脱钩）。
+typedef int  (*s_pj_f5_t)(uint64_t note);
+typedef void (*s_pj_f7_t)(uint64_t note, uint64_t v);
+
+static _Atomic(uint64_t) s_pj_ng    = 0;    // 已被施写 312 的 note 组
+static uint8_t           s_pj_saved = 0;    // 首见时的 312 原值
+static int               s_pj_marked;       // 诊断：累计"路过跳过"标记数
+
+static bool s_pj_isptr(uint64_t v) { return v >= 0x100000000ULL && v < 0x7000000000ULL; }
+static bool s_pj_ishp(uint64_t v)  { return s_pj_isptr(v) && (v & 7) == 0; }
+
+// 只对"即将标记"的候选做类名检查（低频）：LogicSceneControl 不标。
+static bool s_pj_is_scenecontrol(uint64_t vt) {
+    uint64_t ti = 0, nm = 0;
+    if (!s_pj_isptr(vt)) return false;
+    memcpy(&ti, (void *)(vt - 8), 8);
+    if (!s_pj_isptr(ti)) return false;
+    memcpy(&nm, (void *)(ti + 8), 8);
+    if (!s_pj_isptr(nm)) return false;
+    char buf[64];
+    memcpy(buf, (void *)nm, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = 0;
+    for (int i = 0; i < (int)sizeof(buf); i++) {
+        char c = buf[i];
+        if (!c) break;
+        if (c < 0x20 || c > 0x7e) { buf[i] = 0; break; }
+    }
+    return strstr(buf, "SceneControl") != NULL;
+}
+
+static void s_pause_pass_skip_tick(uint64_t ng, int32_t cur) {
+    uint64_t b = 0, e = 0;
+    memcpy(&b, (void *)(ng + 0xA0), 8);   // 活动窗口（与 XRCReplay 的 RPF_VEC_BEGIN 同源）
+    memcpy(&e, (void *)(ng + 0xA8), 8);
+    if (!s_pj_ishp(b) || !s_pj_ishp(e) || e < b || (e - b) > 0x100000) return;
+    for (uint64_t p = b; p < e; p += 8) {
+        uint64_t note = 0;
+        memcpy(&note, (void *)p, 8);
+        if (!s_pj_ishp(note)) continue;
+        int32_t te = 0;
+        memcpy(&te, (void *)(note + 0x1C), 4);
+        if (te == 0 || (int64_t)cur - (int64_t)te <= 100) continue;   // 未越过终点
+        uint64_t vt = 0;
+        memcpy(&vt, (void *)note, 8);
+        if (!s_pj_ishp(vt)) continue;
+        uint64_t f5 = 0, f7 = 0;
+        memcpy(&f5, (void *)(vt + 40), 8);
+        memcpy(&f7, (void *)(vt + 56), 8);
+        if (!s_pj_isptr(f5) || !s_pj_isptr(f7)) continue;
+        if (((s_pj_f5_t)f5)(note) & 1) continue;                      // 已消费：跳过
+        if (s_pj_is_scenecontrol(vt)) continue;
+        ((s_pj_f7_t)f7)(note, 1);
+        s_pj_marked++;
+    }
+}
+
+// 每帧（gp.update、note_group 有效、先于引擎 tick）：
+static void s_pause_tick(void *ngp) {
+    uint64_t ng = (uint64_t)ngp;
+    if (atomic_load(&s_practice_paused)) {
+        if (atomic_load(&s_pj_ng) != ng) {           // 首见（或场景重建换 ng）：记录原值
+            atomic_store(&s_pj_ng, ng);
+            s_pj_saved = *(uint8_t *)((char *)ng + XRC_NG_JUDGE_GATE_OFF);
+        }
+        uint8_t g = *(uint8_t *)((char *)ng + XRC_NG_JUDGE_GATE_OFF);
+        if (!(g & 1)) *(uint8_t *)((char *)ng + XRC_NG_JUDGE_GATE_OFF) = (uint8_t)(g | 1);
+        int32_t cur = xrc_chart_clock_ms(ngp);
+        if (cur >= 0) s_pause_pass_skip_tick(ng, cur);
+        /* 驻停看护：冻结被误扣 → 当场补回（日志上方 [clock] freeze 行可点名来源） */
+        if (!atomic_load(&s_frz_state) && xrc_clock_freeze_count() == 0) {
+            xrc_logw(XRCLC_JUDGE, @"[clock] 驻停冻结计数被扣到 0——当场补回（见上方 freeze 日志）");
+            xrc_clock_freeze_inc();
+        }
+    } else {
+        uint64_t old = atomic_exchange(&s_pj_ng, 0);
+        if (old && old == ng) {
+            /* 关闸前收尾：先补一遍路过跳过（覆盖最后一帧的入场），再恢复 312 */
+            int32_t cur = xrc_chart_clock_ms(ngp);
+            if (cur >= 0) s_pause_pass_skip_tick(ng, cur);
+            uint8_t g = *(uint8_t *)((char *)ng + XRC_NG_JUDGE_GATE_OFF);
+            if (g & 1) *(uint8_t *)((char *)ng + XRC_NG_JUDGE_GATE_OFF) = s_pj_saved;
+            xrc_logd(XRCLC_JUDGE, @"暂停护栏解除：判定总闸还原（路过跳过累计 %d）", s_pj_marked);
+        }
+    }
+}
+
+bool xrc_gameplay_in_song(void) {
+    return s_valid_note_group((void *)atomic_load(&xrc_gp_instance)) != NULL;
 }
 
 // 在游戏循环内执行 pending（self = 当前活场景）。
@@ -559,6 +667,7 @@ void xrc_gameplay_update(void *self, uint64_t a2, uint64_t a3, uint64_t a4, uint
         atomic_store(&xrc_gp_instance, self);
         void *note_group = *(void **)((char *)self + XRC_GP_NOTEGROUP_OFF);
         if (note_group) {
+            s_pause_tick(note_group);      // 暂停护栏（判定总闸/路过跳过/冻结看护）
             s_gp_retime_logic_clock(note_group);
             s_rate_probe_tick(note_group);      // 音画倍率自测（1 Hz，只读）
             int32_t pos = xrc_chart_clock_ms(note_group);

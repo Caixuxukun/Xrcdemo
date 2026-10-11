@@ -295,9 +295,14 @@ static void doBootstrap(void) {
     });
 }
 
+// 前后台**配对开关**：willEnterForeground 可能在不配对的情况下到达（系统弹层/
+// 恢复路径）——未配对的它若直接扣冻结计数，会把别人（如面板驻停）的冻结扣掉。
+static int s_bg_hold = 0;
 static void onAppDidEnterBackground(CFNotificationCenterRef center, void *observer,
                                     CFStringRef name, const void *object,
                                     CFDictionaryRef userInfo) {
+    if (s_bg_hold) return;                 /* 已持有：重复后台通知不重复计 */
+    s_bg_hold = 1;
     xrc_clock_freeze_inc();
     xrc_logd(XRCLC_BOOT, @"app -> background, warp frozen (count=%d)", xrc_clock_freeze_count());
 }
@@ -305,6 +310,11 @@ static void onAppDidEnterBackground(CFNotificationCenterRef center, void *observ
 static void onAppWillEnterForeground(CFNotificationCenterRef center, void *observer,
                                      CFStringRef name, const void *object,
                                      CFDictionaryRef userInfo) {
+    if (!s_bg_hold) {                      /* 未配对的前台通知：不碰冻结计数 */
+        xrc_logd(XRCLC_BOOT, @"app -> foreground（未配对，忽略；count=%d）", xrc_clock_freeze_count());
+        return;
+    }
+    s_bg_hold = 0;
     xrc_clock_freeze_dec();
     xrc_logd(XRCLC_BOOT, @"app -> foreground, warp unfrozen (count=%d)", xrc_clock_freeze_count());
 }

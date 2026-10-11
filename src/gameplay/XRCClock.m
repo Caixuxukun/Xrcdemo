@@ -50,6 +50,7 @@ void xrc_clock_set_rate(double rate) {
 
 void xrc_clock_freeze_inc(void) {
     int32_t prev = atomic_fetch_add(&s_freeze_count, 1);
+    xrc_logd(XRCLC_BOOT, @"[clock] freeze inc %d→%d", prev, prev + 1);
     if (prev == 0)
         atomic_store(&s_frozen_us, s_compute_warp_us(xrc_real_now_us()));
 }
@@ -58,8 +59,10 @@ void xrc_clock_freeze_dec(void) {
     int32_t prev = atomic_fetch_sub(&s_freeze_count, 1);
     if (prev <= 0) {
         atomic_store(&s_freeze_count, 0);
+        xrc_logd(XRCLC_BOOT, @"[clock] freeze dec %d→0（未配对，已夹紧）", prev);
         return;
     }
+    xrc_logd(XRCLC_BOOT, @"[clock] freeze dec %d→%d", prev, prev - 1);
     if (prev == 1) {
         uint64_t real_now = xrc_real_now_us();
         uint64_t frozen = atomic_load(&s_frozen_us);
