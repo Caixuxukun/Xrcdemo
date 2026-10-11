@@ -1040,15 +1040,23 @@ static void rpf_arc_indicator_reset_all(uint64_t mgr) {
 
 
 // ---- 跳钟「跳过弧」视觉清扫（拖动预览 / ±5s 跳钟 / 驻停共用）----
-// 症状：时间被跳跃越过（拖动、跳转）之后，判定面上遗留点状残影（指示器快照、落点
+// 症状一：时间被跳跃越过（拖动、跳转）之后，判定面上遗留点状残影（指示器快照、落点
 // 菱形 / 起手箭头等固定在判定线上的可见子件）；拖动越密、残留越多。
 // 机制：跳跃不经过引擎连续的「头过线」隐藏路径（AFFA90/AFFC10），被越过的弧没有任何
-// 一步把可见子件翻篇 —— 与「判定面残点」同族，只是触发从 seek 扩到任何跳钟。
-// 处理：与「路过跳过」（逻辑消费 vtable idx7）**配对**的一次视觉清扫 —— 把
-// end < cur−100 的弧整体隐藏（对象槽 42 置 0，与重建旧对象隐藏同一杠杆）＋指示器
-// 顶点清零（防对象再显时快照复现；两者皆幂等）。判据用弧逻辑音符 +0x1C（end），与
-// 路过跳过同一把尺与同一余量（100ms），te==0 同规则跳过。
-// 调用点全部在游戏 tick 串行上下文（scrub 落笔 / 暂停帧 / seek 执行点）。
+// 一步把可见子件翻篇；且渲染遍历是"按逻辑音符的绘制门 note+0x0D 整帧不画"（slot6），
+// 只做对象级隐藏会被照常 tick 的渲染对象顶回 ⇒ 必须写门。
+// 症状二（本函数的不变式）：拖动**回头**到弧之前时，引擎不会自行重显被隐藏的弧
+// ⇒"弧的头没了"。故本函数维护不变式：**隐藏 ⇔ end+100 < cur**，双向：
+//   · 越过 → 对象槽 42 置 0 ＋指示器快照清零＋绘制门置 1；并**登记**（只动我们动过的）；
+//   · 回头（未越过且登记过）→ 对象槽 42 置 1 ＋绘制门清 0（判定态 +0x0C 不动：
+//     重显只恢复"看得见"，不重新可判）。未登记的对象一律不碰（引擎自己管的裁剪）。
+// 判据用弧逻辑音符 +0x1C（end），与路过跳过同一把尺与同一余量（100ms），te==0 跳过。
+// 调用点全部在游戏 tick 串行上下文（scrub 落笔 / 暂停帧 / 恢复帧 / seek 执行点）。
+static uint64_t s_sv_rn[256];          /* 我们隐藏过的弧渲染对象 */
+static uint64_t s_sv_lg[256];          /* 对应的逻辑音符（清绘制门用） */
+static int      s_sv_n;                /* 有效条目 */
+static int      s_sv_ring;             /* 溢出时的环形覆盖位 */
+
 void xrc_replay_arc_visual_sweep(uint32_t cur_ms) {
     uint64_t scene = xrc_gameplay_instance();
     if (!s_ishp(scene)) return;
@@ -1059,7 +1067,7 @@ void xrc_replay_arc_visual_sweep(uint32_t cur_ms) {
     if (!s_ishp(rb) || !s_ishp(re) || re < rb) return;
     long n = (long)((re - rb) / 8);
     if (n <= 0 || n > 8192) return;
-    int nhid = 0;
+    int nhid = 0, nshow = 0;
     for (long i = 0; i < n; i++) {
         uint64_t rn = 0, rvt = 0;
         if (!rd(rb + 8 * (uint64_t)i, &rn, 8) || !s_ishp(rn)) continue;
@@ -1072,22 +1080,42 @@ void xrc_replay_arc_visual_sweep(uint32_t cur_ms) {
         if (!rd(lg + XRC_NOTE_TIME_END_OFF, &te64, 8)) continue;
         int32_t te = (int32_t)(uint32_t)te64;
         if (te == 0) continue;
-        if ((int64_t)cur_ms - (int64_t)te <= 100) continue;               /* 未越过终点 */
-        uint64_t f336 = 0;
-        if (rd(rvt + 336, &f336, 8) && s_isptr(f336))
-            ((void (*)(uint64_t, uint64_t))f336)(rn, 0);                  /* 整体隐藏（软杠杆） */
-        rpf_arc_indicator_clear_one(rn);                                  /* 快照清零 */
-        /* 硬杠杆：置逻辑音符的**绘制门** note+0x0D=1（渲染遍历 slot6 直读；与引擎被判后的
-           状态一致——转引见本文件事件去重表段）。对象级隐藏会被照常 tick 的渲染对象顶回，
-           只会被"整帧不画"真正消灭。 */
-        {
+        if ((int64_t)cur_ms - (int64_t)te > 100) {
+            /* ── 越过：隐藏（对象软杠杆 + 绘制门硬杠杆）＋快照清零＋登记 ── */
+            uint64_t f336 = 0;
+            if (rd(rvt + 336, &f336, 8) && s_isptr(f336))
+                ((void (*)(uint64_t, uint64_t))f336)(rn, 0);
+            rpf_arc_indicator_clear_one(rn);
             uint8_t gd = 0;
             if (rd(lg + 0x0D, &gd, 1) && !(gd & 1)) wr8(lg + 0x0D, (uint8_t)(gd | 1));
+            int found = -1;
+            for (int k = 0; k < s_sv_n; k++) if (s_sv_rn[k] == rn) { found = k; break; }
+            if (found >= 0) s_sv_lg[found] = lg;
+            else if (s_sv_n < 256) { s_sv_rn[s_sv_n] = rn; s_sv_lg[s_sv_n] = lg; s_sv_n++; }
+            else { s_sv_ring = (s_sv_ring + 1) & 255; s_sv_rn[s_sv_ring] = rn; s_sv_lg[s_sv_ring] = lg; }
+            nhid++;
+        } else {
+            /* ── 回头（未越过）：仅对登记过的对象做重显（引擎自管的裁剪一律不碰） ── */
+            for (int k = 0; k < s_sv_n; k++) {
+                if (s_sv_rn[k] != rn) continue;
+                uint64_t f336 = 0;
+                if (rd(rvt + 336, &f336, 8) && s_isptr(f336))
+                    ((void (*)(uint64_t, uint64_t))f336)(rn, 1);
+                if (s_sv_lg[k]) {
+                    uint8_t gd = 0;
+                    if (rd(s_sv_lg[k] + 0x0D, &gd, 1) && (gd & 1))
+                        wr8(s_sv_lg[k] + 0x0D, (uint8_t)(gd & ~1));
+                }
+                s_sv_rn[k] = s_sv_rn[s_sv_n - 1];
+                s_sv_lg[k] = s_sv_lg[s_sv_n - 1];
+                s_sv_n--;
+                nshow++;
+                break;
+            }
         }
-        nhid++;
     }
-    if (nhid > 0)
-        xrc_logd(XRCLC_JUDGE, @"[rpf] ▧ 跳过弧视觉清扫：隐藏 %d 条（cur=%u）", nhid, cur_ms);
+    if (nhid > 0 || nshow > 0)
+        xrc_logd(XRCLC_JUDGE, @"[rpf] ▧ 跳钟视觉清扫：隐藏 %d 重显 %d（cur=%u）", nhid, nshow, cur_ms);
 }
 
 

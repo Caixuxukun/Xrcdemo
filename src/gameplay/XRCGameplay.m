@@ -339,6 +339,7 @@ typedef void (*s_pj_f7_t)(uint64_t note, uint64_t v);
 static _Atomic(uint64_t) s_pj_ng    = 0;    // 已被施写 312 的 note 组
 static uint8_t           s_pj_saved = 0;    // 首见时的 312 原值
 static int               s_pj_marked;       // 诊断：累计"路过跳过"标记数
+static int               s_pj_te0;          // 诊断：窗口内次时间(+0x1C)==0 而被跳过的条目数
 
 static bool s_pj_isptr(uint64_t v) { return v >= 0x100000000ULL && v < 0x7000000000ULL; }
 static bool s_pj_ishp(uint64_t v)  { return s_pj_isptr(v) && (v & 7) == 0; }
@@ -373,7 +374,8 @@ static void s_pause_pass_skip_tick(uint64_t ng, int32_t cur) {
         if (!s_pj_ishp(note)) continue;
         int32_t te = 0;
         memcpy(&te, (void *)(note + 0x1C), 4);
-        if (te == 0 || (int64_t)cur - (int64_t)te <= 100) continue;   // 未越过终点
+        if (te == 0) { s_pj_te0++; continue; }                        // 次时间为 0：按规则跳过（留痕）
+        if ((int64_t)cur - (int64_t)te <= 100) continue;              // 未越过终点
         uint64_t vt = 0;
         memcpy(&vt, (void *)note, 8);
         if (!s_pj_ishp(vt)) continue;
@@ -381,18 +383,17 @@ static void s_pause_pass_skip_tick(uint64_t ng, int32_t cur) {
         memcpy(&f5, (void *)(vt + 40), 8);
         memcpy(&f7, (void *)(vt + 56), 8);
         if (!s_pj_isptr(f5) || !s_pj_isptr(f7)) continue;
-        if (((s_pj_f5_t)f5)(note) & 1) continue;                      // 已消费：跳过
         if (s_pj_is_scenecontrol(vt)) continue;
-        ((s_pj_f7_t)f7)(note, 1);
-        /* **绘制门**：引擎判定写入者（sub_10089D50C，转引见 XRCReplay.m）在被判后还会置
-           note+0x0D=1 —— 渲染遍历的 slot6 直接读这个字节，非 0 即整帧不画（各类型通用）。
-           快进消费（f7）不含这一笔：只写 +0x0C 的话音符照样被绘制 ⇒ 被越过的弧/音符留在
-           判定面上（"拖动/seek 后黑点"的机械原因；对象级隐藏会被照常 tick 的渲染对象顶回）。
-           补上 = 与引擎自己被判后的状态一致（重播链"解除消费"正是把这两字节一起清）。 */
+        /* **绘制门无条件**：只要"越过"就保证 note+0x0D=1（各类型通用的"整帧不画"闸，
+           渲染遍历 slot6 直读；与引擎判定写入者 sub_10089D50C 被判后的状态一致）。
+           放在 f5 消费检查**之前**：已消费的也要保证不画——拖回头重显时会清它（见
+           XRCReplay 的视觉清扫），不清的话循环拖动会把"已消费但重显过"的音符再漏出来。 */
         {
             uint8_t gd = *(uint8_t *)(note + 0x0D);
             if (!(gd & 1)) *(uint8_t *)(note + 0x0D) = (uint8_t)(gd | 1);
         }
+        if (((s_pj_f5_t)f5)(note) & 1) continue;                      // 已消费：跳过逻辑消费
+        ((s_pj_f7_t)f7)(note, 1);
         s_pj_marked++;
     }
 }
@@ -442,7 +443,8 @@ static void s_pause_tick(void *ngp) {
             }
             uint8_t g = *(uint8_t *)((char *)ng + XRC_NG_JUDGE_GATE_OFF);
             if (g & 1) *(uint8_t *)((char *)ng + XRC_NG_JUDGE_GATE_OFF) = s_pj_saved;
-            xrc_logd(XRCLC_JUDGE, @"暂停护栏解除：判定总闸还原（路过跳过累计 %d）", s_pj_marked);
+            xrc_logd(XRCLC_JUDGE, @"暂停护栏解除：判定总闸还原（路过跳过累计 %d，te0 跳过 %d）",
+                     s_pj_marked, s_pj_te0);
         }
     }
 }
