@@ -245,9 +245,12 @@ static NSString *const kNoteSpeed =
     self.timeline.onScrubEnd = ^(uint32_t ms) {
         __strong typeof(self) sf = weakTL; if (!sf) return;
         if (!xrc_gameplay_in_song()) return;
-        /* 会话收尾一律走重播事务（重置/复活/重建链）——不限深回退：浅移/前进同样会
-           越过弧与音符，缺这笔就是"松手继续后残影密布 + 判定特效突发"的来源。 */
-        xrc_gameplay_request(XRC_OP_SEEK_REPLAY, ms);
+        uint32_t start = xrc_player_position_ms();
+        if (start > ms + 300)                     // 深回退：重播事务接管（重置/复活/重建）
+            xrc_gameplay_request(XRC_OP_SEEK_REPLAY, ms);
+        // 浅回退/前进：不跑重播事务——事务尾的指示器全量清零会把**正在播放中的弧头光柱**
+        // 也清掉（只在头段换段时自愈 ⇒ 停在弧中段时"弧的头没了"），且被越过的残留已由
+        // 「路过跳过＋绘制门(+0x0D)＋视觉清扫」就地处理，无需事务。
     };
     self.timeline.onLoopRangeChanged = ^(double from, double to, BOOL finished) {
         __strong typeof(self) sf = weakTL; if (!sf) return;
