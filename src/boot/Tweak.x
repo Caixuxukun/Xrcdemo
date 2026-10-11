@@ -165,40 +165,31 @@ static void initButton(void) {
     if (!g_cfg.button_enabled) [button setHiddenState:YES];
 #if !XRC_DEBUG_BUILD
     /* 运行时可见水印（发布构建）。设计取舍：
-       · 可溯源：右锚点含显示版本＋构建戳（sha+时间）——每一份构建可对回其源码时点；
-       · 难同时遮挡：左右双锚点（左下＝署名 / 右下＝版本戳），且随窗口置顶、
-         任何新视图加入都会被 UIWindow hook 重新提到最前（见上方 hook）；
-       · 不碍游玩：10.5pt、半透明白＋深色描影，贴屏幕底缘、避开判定线中心区，
-         不可交互、不吃触摸。 */
+       · 位置＝屏幕**顶部中央**：顶缘中带远离操作区与判定线（不碍游玩），
+         且居中一字排开难以被局部遮挡；
+       · 可溯源：正文含署名＋显示版本＋构建戳（sha+时间）——每一份构建可对回其源码时点；
+       · 固定性：随窗口置顶（任何新视图加入都会被上方 UIWindow hook 重新提到最前）、
+         配置不可关、不可交互、不吃触摸。 */
     if (!g_mark && w) {
-        NSMutableArray *ms = [NSMutableArray array];
-        UILabel *(^mk)(NSString *) = ^UILabel *(NSString *text) {
-            UILabel *l = [[UILabel alloc] init];
-            l.text = text;
-            l.font = [UIFont systemFontOfSize:10.5 weight:UIFontWeightSemibold];
-            l.textColor = [UIColor colorWithWhite:1.0 alpha:0.55];
-            l.shadowColor = [UIColor colorWithWhite:0.0 alpha:0.7];
-            l.shadowOffset = CGSizeMake(1, 1);
-            l.userInteractionEnabled = NO;
-            [w addSubview:l];
-            [l sizeToFit];
-            [ms addObject:l];
-            return l;
-        };
-        UILabel *ml = mk(@"© 雾月星辰&MLXC · github@XingChenRS");
-        ml.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleRightMargin;
-        CGRect b1 = ml.frame;
-        b1.origin = CGPointMake(10, w.bounds.size.height - w.safeAreaInsets.bottom - b1.size.height - 5);
-        ml.frame = b1;
-        UILabel *mr = mk([NSString stringWithFormat:@"v%@ · %s", XRC_VERSION, XRC_BUILD_STAMP]);
-        mr.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleLeftMargin;
-        CGRect b2 = mr.frame;
-        b2.origin = CGPointMake(w.bounds.size.width - b2.size.width - 10,
-                                w.bounds.size.height - w.safeAreaInsets.bottom - b2.size.height - 5);
-        mr.frame = b2;
-        g_mark = ms;   // 持有双锚点（hook 逐个置顶）
-        for (UILabel *l in ms) [w bringSubviewToFront:l];
-        xrc_logi(XRCLC_BOOT, @"[boot] 发布构建水印已挂载（双锚点）");
+        UILabel *l = [[UILabel alloc] init];
+        l.text = [NSString stringWithFormat:@"© 雾月星辰&MLXC · github@XingChenRS · v%@ · %s",
+                                            XRC_VERSION, XRC_BUILD_STAMP];
+        l.font = [UIFont systemFontOfSize:11 weight:UIFontWeightSemibold];
+        l.textColor = [UIColor colorWithWhite:1.0 alpha:0.6];
+        l.shadowColor = [UIColor colorWithWhite:0.0 alpha:0.75];
+        l.shadowOffset = CGSizeMake(1, 1);
+        l.userInteractionEnabled = NO;
+        l.textAlignment = NSTextAlignmentCenter;
+        l.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleTopMargin;
+        [w addSubview:l];
+        [l sizeToFit];
+        CGRect lb = l.frame;
+        lb.origin = CGPointMake((w.bounds.size.width - lb.size.width) / 2.0,
+                                w.safeAreaInsets.top + 2);
+        l.frame = lb;
+        g_mark = @[ l ];
+        [w bringSubviewToFront:l];
+        xrc_logi(XRCLC_BOOT, @"[boot] 发布构建水印已挂载（顶部中央）");
     }
 #endif
 }
