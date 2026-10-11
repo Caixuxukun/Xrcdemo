@@ -84,3 +84,19 @@ UIImage *xrc_theme_img9(NSString *relPath, CGFloat lPx, CGFloat tPx, CGFloat rPx
     if (!im) return nil;
     return [im resizableImageWithCapInsets:UIEdgeInsetsMake(tPx / 1.5, lPx / 1.5, bPx / 1.5, rPx / 1.5)];
 }
+
+UIImage *xrc_theme_img9_crop(NSString *relPath, CGRect cropPx,
+                             CGFloat lPx, CGFloat tPx, CGFloat rPx, CGFloat bPx) {
+    if (!relPath.length) return nil;
+    NSString *path = [[[NSBundle mainBundle] bundlePath] stringByAppendingPathComponent:relPath];
+    UIImage *raw = [UIImage imageWithContentsOfFile:path];
+    if (!raw.CGImage) {
+        xrc_logd(XRCLC_UI, @"[theme] 素材缺失：%@", relPath);
+        return nil;
+    }
+    CGImageRef sub = CGImageCreateWithImageInRect(raw.CGImage, cropPx);
+    if (!sub) return nil;
+    UIImage *im = [[UIImage alloc] initWithCGImage:sub scale:1.5 orientation:UIImageOrientationUp];
+    CGImageRelease(sub);
+    return [im resizableImageWithCapInsets:UIEdgeInsetsMake(tPx / 1.5, lPx / 1.5, bPx / 1.5, rPx / 1.5)];
+}

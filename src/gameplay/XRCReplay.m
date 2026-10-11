@@ -1039,6 +1039,51 @@ static void rpf_arc_indicator_reset_all(uint64_t mgr) {
 }
 
 
+// ---- 跳钟「跳过弧」视觉清扫（拖动预览 / ±5s 跳钟 / 驻停共用）----
+// 症状：时间被跳跃越过（拖动、跳转）之后，判定面上遗留点状残影（指示器快照、落点
+// 菱形 / 起手箭头等固定在判定线上的可见子件）；拖动越密、残留越多。
+// 机制：跳跃不经过引擎连续的「头过线」隐藏路径（AFFA90/AFFC10），被越过的弧没有任何
+// 一步把可见子件翻篇 —— 与「判定面残点」同族，只是触发从 seek 扩到任何跳钟。
+// 处理：与「路过跳过」（逻辑消费 vtable idx7）**配对**的一次视觉清扫 —— 把
+// end < cur−100 的弧整体隐藏（对象槽 42 置 0，与重建旧对象隐藏同一杠杆）＋指示器
+// 顶点清零（防对象再显时快照复现；两者皆幂等）。判据用弧逻辑音符 +0x1C（end），与
+// 路过跳过同一把尺与同一余量（100ms），te==0 同规则跳过。
+// 调用点全部在游戏 tick 串行上下文（scrub 落笔 / 暂停帧 / seek 执行点）。
+void xrc_replay_arc_visual_sweep(uint32_t cur_ms) {
+    uint64_t scene = xrc_gameplay_instance();
+    if (!s_ishp(scene)) return;
+    uint64_t mgr = 0;
+    if (!rd(scene + RPF_RENDERMGR, &mgr, 8) || !s_ishp(mgr)) return;
+    uint64_t rb = 0, re = 0;
+    if (!rd(mgr + RPF_RM_REG_BEGIN, &rb, 8) || !rd(mgr + RPF_RM_REG_END, &re, 8)) return;
+    if (!s_ishp(rb) || !s_ishp(re) || re < rb) return;
+    long n = (long)((re - rb) / 8);
+    if (n <= 0 || n > 8192) return;
+    int nhid = 0;
+    for (long i = 0; i < n; i++) {
+        uint64_t rn = 0, rvt = 0;
+        if (!rd(rb + 8 * (uint64_t)i, &rn, 8) || !s_ishp(rn)) continue;
+        if (!rd(rn, &rvt, 8) || !s_isptr(rvt)) continue;
+        char nm[96];
+        rpf_class_name(rvt, nm, sizeof(nm));
+        if (!strstr(nm, "RenderArc") || strstr(nm, "ArcTap")) continue;   /* 锁定 RenderArcNote */
+        uint64_t lg = 0, te64 = 0;
+        if (!rd(rn + 0x268, &lg, 8) || !s_isptr(lg)) continue;            /* +0x268 = LogicArcNote */
+        if (!rd(lg + XRC_NOTE_TIME_END_OFF, &te64, 8)) continue;
+        int32_t te = (int32_t)(uint32_t)te64;
+        if (te == 0) continue;
+        if ((int64_t)cur_ms - (int64_t)te <= 100) continue;               /* 未越过终点 */
+        uint64_t f336 = 0;
+        if (rd(rvt + 336, &f336, 8) && s_isptr(f336))
+            ((void (*)(uint64_t, uint64_t))f336)(rn, 0);                  /* 整体隐藏 */
+        rpf_arc_indicator_clear_one(rn);                                  /* 快照清零 */
+        nhid++;
+    }
+    if (nhid > 0)
+        xrc_logd(XRCLC_JUDGE, @"[rpf] ▧ 跳过弧视觉清扫：隐藏 %d 条（cur=%u）", nhid, cur_ms);
+}
+
+
 static void rpf_freeze_end(void);   /* 前向声明（定义在 reset_job 段；重建链末尾收口用） */
 
 static void rpf_rebuild_main(void *ctx) {

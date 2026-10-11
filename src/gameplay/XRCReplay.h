@@ -20,3 +20,8 @@ bool xrc_replay_enabled(void);
 // 与自动检出同一入口；P 取当前水位线（回跳前高水位），随后水位线消化到 T
 // ——防自动检出对同一次回跳再触发一遍。总门关闭/目标越界/场景无效时为无害空操作。
 void xrc_replay_request_reset(uint32_t T);
+
+// 跳钟「跳过弧」视觉清扫：把 end < cur−100ms 的弧整体隐藏 + 指示器快照清零
+// （与「路过跳过」的逻辑消费配对；拖动预览 / ±5s 跳钟 / 驻停每帧调用）。
+// 只在游戏 tick 串行上下文调用。与重播总门无关（纯视觉面，恒有效）。
+void xrc_replay_arc_visual_sweep(uint32_t cur_ms);

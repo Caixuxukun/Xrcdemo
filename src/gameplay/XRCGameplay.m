@@ -241,6 +241,8 @@ static void s_frz_tick(void *note_group) {
 
 // XRCReplay 导出（暂停驻停提交用）
 extern void xrc_replay_request_reset(uint32_t T);
+// XRCReplay 导出（跳过弧视觉清扫：与路过跳过配对的视觉面）
+extern void xrc_replay_arc_visual_sweep(uint32_t cur_ms);
 
 #pragma mark - 练习暂停 / 拖动 seek
 
@@ -311,6 +313,7 @@ static void s_scrub_tick(void *self) {
     xrc_clock_shift_to(ng, (int32_t)ms);
     atomic_store(&s_pin_ms, (int32_t)ms);
     atomic_store(&s_pin_valid, 1);
+    xrc_replay_arc_visual_sweep(ms);            /* 配对视觉面：越过即隐藏（残点来源） */
     s_gp_last_real_us = 0;                      /* 钟被移动：retime 基准作废 */
     atomic_store(&s_scrub_us, xrc_real_now_us());
 }
@@ -410,7 +413,10 @@ static void s_pause_tick(void *ngp) {
                 cur = pin;
             }
         }
-        if (cur >= 0) s_pause_pass_skip_tick(ng, cur);
+        if (cur >= 0) {
+            s_pause_pass_skip_tick(ng, cur);
+            xrc_replay_arc_visual_sweep((uint32_t)cur);   /* 视觉面：驻停期间同样清扫 */
+        }
         /* 驻停看护：冻结计数归零即当场补回（日志上方 [clock] freeze 行可点名来源） */
         if (!atomic_load(&s_frz_state) && xrc_clock_freeze_count() == 0) {
             xrc_logw(XRCLC_JUDGE, @"[clock] 驻停冻结计数被扣到 0——当场补回（见上方 freeze 日志）");
@@ -421,7 +427,10 @@ static void s_pause_tick(void *ngp) {
         if (old && old == ng) {
             /* 关闸前收尾：先补一遍路过跳过（覆盖最后一帧的入场），再恢复 312 */
             int32_t cur = xrc_chart_clock_ms(ngp);
-            if (cur >= 0) s_pause_pass_skip_tick(ng, cur);
+            if (cur >= 0) {
+                s_pause_pass_skip_tick(ng, cur);
+                xrc_replay_arc_visual_sweep((uint32_t)cur);   /* 恢复帧：闸门复原前再清一次 */
+            }
             uint8_t g = *(uint8_t *)((char *)ng + XRC_NG_JUDGE_GATE_OFF);
             if (g & 1) *(uint8_t *)((char *)ng + XRC_NG_JUDGE_GATE_OFF) = s_pj_saved;
             xrc_logd(XRCLC_JUDGE, @"暂停护栏解除：判定总闸还原（路过跳过累计 %d）", s_pj_marked);
@@ -531,6 +540,7 @@ static void s_exec_pending(void *self) {
         // 定位用 **base 平移**（唯一验证过的写；理由见 xrc_clock_shift_to 注释）。
         // 前导期已在上面闸门整笔丢弃 ⇒ 这里 cur≥0。
         xrc_clock_shift_to(note_group, (int32_t)ms);
+        if (ms) xrc_replay_arc_visual_sweep(ms);   /* 视觉面：±5s 等跳钟同样清扫 */
         s_gp_last_real_us = 0;
 
         if (frz) {

@@ -23,6 +23,11 @@ UIFont *xrc_theme_font(NSString *psName, CGFloat designPx);
 UIImage *xrc_theme_img(NSString *relPath);
 // 九宫格：insets 传**素材像素**（引擎 capInsets 原值），内部 ÷1.5 转为逻辑点
 UIImage *xrc_theme_img9(NSString *relPath, CGFloat lPx, CGFloat tPx, CGFloat rPx, CGFloat bPx);
+// 裁剪 + 九宫格：cropPx 为源素材像素内的裁剪矩形（左上原点），insets 同为**裁剪后**素材
+// 的像素。用于剔除素材自带的透明留白/淡出带（例：pause_backing.png 上下各有一段空区，
+// 直接九宫格拉伸会把空区/内部暗带放大到整卡）。
+UIImage *xrc_theme_img9_crop(NSString *relPath, CGRect cropPx,
+                             CGFloat lPx, CGFloat tPx, CGFloat rPx, CGFloat bPx);
 
 // 色板（与 UI 稿 v4 一致）
 #define XRC_TXT      [UIColor whiteColor]

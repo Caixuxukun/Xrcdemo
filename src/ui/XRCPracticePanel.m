@@ -155,19 +155,25 @@ static NSString *const kNoteSpeed =
     CGFloat W = self.bounds.size.width, H = self.bounds.size.height;
     if (W < 10) W = 852 * S, H = 393 * S;   // show 前被问到时兜底
 
-    // 暗化层（游戏素材，四角自渐隐；外扩 6% 让淡边落到窗口外，与 UI 稿一致）
+    // 暗化层（游戏素材，四角自渐隐；外扩 6% 让淡边落到窗口外，与 UI 稿一致）。
+    // 铺深紫底再叠素材：素材本身是"四角渐隐"的半透明贴图，仅铺它时亮场面（歌曲列表、
+    // 底部横幅）会从卡面外透出来，被误读成"按钮错位/重影"。
     CGRect df = CGRectInset(self.bounds, -self.bounds.size.width * 0.06, -self.bounds.size.height * 0.06);
     self.dim = [[UIImageView alloc] initWithFrame:df];
+    self.dim.backgroundColor = [UIColor colorWithRed:10/255.0 green:6/255.0 blue:16/255.0 alpha:0.35];
     self.dim.image = xrc_theme_img(@"layouts/1080/pause/pause_background_shadow.png");
     self.dim.contentMode = UIViewContentModeScaleToFill;
     self.dim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self addSubview:self.dim];
 
-    // 玻璃卡面（pause_backing 九宫格 + 深紫底衬两层，与 UI 稿一致）。素材中段自带透明区
-    // 与底部淡出带，只铺纹理不垫底色会发透、白字读数不清；底色常开，纹理只叠加。
+    // 玻璃卡面 = pause_backing 九宫格 + 深紫底衬两层（与 UI 稿一致）。素材 1920×660 是
+    // 一条扁横条：y 0..121 与 y 537.. 是透明留白、y 502..537 是渐隐带——直接整张九宫格
+    // 会被拉伸成"上看不到卡、下看不清边"（即"面板显示不全"）。先裁到内容区（y 121..502），
+    // 再按裁剪后的像素取 insets：上 60px（含顶缘与白细线）、下 56px（密边带）、左右 87px。
     CGRect pf = CGRectInset(self.bounds, 10, 10);
     self.glass = [[UIImageView alloc] initWithFrame:pf];
-    self.glass.image = xrc_theme_img9(@"layouts/1080/pause/pause_backing.png", 87, 22, 87, 22);
+    self.glass.image = xrc_theme_img9_crop(@"layouts/1080/pause/pause_backing.png",
+                                           CGRectMake(0, 121, 1920, 381), 87, 60, 87, 56);
     self.glass.backgroundColor = [UIColor colorWithRed:37/255.0 green:23/255.0 blue:42/255.0
                                                  alpha:self.glass.image ? 0.55 : 0.62];
     self.glass.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -239,10 +245,9 @@ static NSString *const kNoteSpeed =
     self.timeline.onScrubEnd = ^(uint32_t ms) {
         __strong typeof(self) sf = weakTL; if (!sf) return;
         if (!xrc_gameplay_in_song()) return;
-        uint32_t start = xrc_player_position_ms();
-        if (start > ms + 300)                     // 深回退：重播引擎接管
-            xrc_gameplay_request(XRC_OP_SEEK_REPLAY, ms);
-        // 浅回退/前进：位置已由 onScrubLive 落位，驻停待「继续/关闭」
+        /* 会话收尾一律走重播事务（重置/复活/重建链）——不限深回退：浅移/前进同样会
+           越过弧与音符，缺这笔就是"松手继续后残影密布 + 判定特效突发"的来源。 */
+        xrc_gameplay_request(XRC_OP_SEEK_REPLAY, ms);
     };
     self.timeline.onLoopRangeChanged = ^(double from, double to, BOOL finished) {
         __strong typeof(self) sf = weakTL; if (!sf) return;
@@ -459,7 +464,10 @@ static NSString *const kNoteSpeed =
     CGFloat w = MAX(parent.bounds.size.width, xrc_theme_px(160));
     UIView *r = [[UIView alloc] initWithFrame:CGRectMake(0, y, w, xrc_theme_px(36))];
     r.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(xrc_theme_px(11), 0, r.bounds.size.width - xrc_theme_px(150), xrc_theme_px(36))];
+    // 标题右侧给控件留位：宽行留 150 设计px；窄列（速度列）按列宽收缩，否则标题被
+    // 挤成省略号（"音乐变速/回跳重播"曾如此）。
+    CGFloat reserve = (w >= xrc_theme_px(240)) ? xrc_theme_px(150) : xrc_theme_px(96);
+    UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(xrc_theme_px(11), 0, w - reserve, xrc_theme_px(36))];
     l.text = title;
     l.font = xrc_theme_font(@"NotoSansCJKsc-Regular", 15);
     l.textColor = [UIColor colorWithRed:244/255.0 green:241/255.0 blue:250/255.0 alpha:1.0];
