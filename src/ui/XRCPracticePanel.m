@@ -1,9 +1,9 @@
 // © 雾月星辰 & MLXC · github@XingChenRS
 // XRCPracticePanel.m — 练习面板（v3）。
-// 设计稿：ui-mock/panel_mock.html（v3）。结构：
+// 设计稿：ui-mock/panel_mock.html（v4）。结构：
 //   固定标题栏（拖动 + ⓘ说明 + ✕；标题=版本号）+ 可滚动内容区（上限 72% 屏高）；分区 =
 //   播放（时间轴/±5s/速度/音乐变速/回跳重播）｜循环（设 A/B + 开关 + 重置）
-//   ｜判定窗口（四档 + 应用 + 自动演奏）｜解锁（构建期功能集逐项显隐）｜网络（开发构建专属：私域改写，地址折叠）
+//   ｜判定窗口（四档 + 应用 + 自动演奏）｜解锁（构建期功能集逐项显隐）｜网络（开发=私域控制项；发布=阻断声明页）
 //   ｜存储（cb 外置）｜诊断（状态两行 + 开发构建专属工具区）。
 // 交互约定（与设计稿对齐）：开关=「名称+状态点」（XRCSwitchRow，tone 控色）；
 //   动作=灰底按钮；破坏性=红字靠右；状态数字只进只读行；控件一律属性引用；
@@ -523,9 +523,10 @@ static NSString *const kNoteDev =
     }        // present>0
     }        // 解锁段外层
 
-    // ============ ⑤ 网络（私服重定向）============
-    // 发布构建不含此分区（规则：只有编译时处于开发模式、且显式开启「私服」条目，
-    // 才启用该功能）。私服内容的版权 / 数据处理 / 安全性由使用者自负；
+    // ============ ⑤ 网络 ============
+    // 开发构建：私服重定向控制（默认关，显式开启「私服」条目才生效）。
+    // 发布构建：网络层已阻断（见 XRCNet.h 规则注释），本页只作声明、不提供任何网络功能入口。
+    // 私服内容的版权 / 数据处理 / 安全性由使用者自负；
     // 本插件默认的练习能力不强制绑定私服。
 #if XRC_DEV_SECTION
     [self sectionLabel:@"网络" hint:@"只改 API 域名，不动 TLS" x:x0 y:y w:W];
@@ -569,7 +570,21 @@ static NSString *const kNoteDev =
     [c5 addSubview:self.netStat];
     c5.frame = CGRectMake(x0, y, W, ny + 12 + cardPad);
     y = [self note:kNoteNet afterCard:c5 x:x0 y:y w:W] + secGap;
-#endif  /* XRC_DEV_SECTION：网络分区（开发构建专属） */
+#else
+    /* 发布构建：本页为声明页——不提供任何网络功能入口 */
+    [self sectionLabel:@"网络" hint:@"发布构建" x:x0 y:y w:W];
+    y += secH + 4;
+    UIView *c5 = [self cardAt:x0 y:y w:W];
+    {
+        UILabel *notice = [[UILabel alloc] initWithFrame:CGRectMake(cardPad, cardPad + 2, W - cardPad * 2, 18)];
+        notice.text = @"未授权构建，不提供联网功能";
+        notice.font = [UIFont systemFontOfSize:12];
+        notice.textColor = [UIColor colorWithWhite:0.72 alpha:1.0];
+        [c5 addSubview:notice];
+        c5.frame = CGRectMake(x0, y, W, cardPad + 18 + cardPad + 2);
+        y += c5.frame.size.height + gap;
+    }
+#endif  /* XRC_DEV_SECTION：网络页（开发=控制项 / 发布=声明） */
 
     // ============ ⑥ 存储（外置）============
     // 纯 dylib 功能：不依赖任何二进制补丁，注入未打桩的二进制也照常可用（能力模型）。
@@ -1152,7 +1167,7 @@ static NSString *const kNoteDev =
 #if XRC_DEV_SECTION
             @" 网络✓";
 #else
-            @"";        /* 发布构建不含私服重定向（见 XRCNet.h 规则注释） */
+            @" 联网✗(已阻断)";   /* 发布构建：主动阻断联网（见 XRCNet.h 规则注释） */
 #endif
         self.patchLine.text = [NSString stringWithFormat:
             @"能力：桩%@ 播放器%@ gp%@ 变速✓%@ ｜ 未含：%@",

@@ -27,6 +27,18 @@
 #import "XRCLog.h"
 
 static _Atomic(bool) s_enabled = false;
+
+// ---- 发布构建：联网阻断（编译期锁死，规则单一出处 = XRCNet.h 文件头）----
+// 全部 http(s) 请求的主域名重写到 RFC 2606 保留域 `.invalid`：DNS 必然 NXDOMAIN、
+// 立即失败、不出网包（比黑洞 IP 挂到超时干净）。无开关、配置改不回来。
+#define XRC_NET_BLOCK_HOST  "xrcdemo-blocked.invalid"
+static bool s_should_rewrite(void) {
+#if !XRC_DEBUG_BUILD
+    return true;                       /* 发布构建恒阻断 */
+#else
+    return atomic_load(&s_enabled);    /* 开发构建：显式开启才改写（私服） */
+#endif
+}
 static _Atomic(unsigned long long) s_requests = 0;
 static _Atomic(unsigned long long) s_rewritten = 0;
 
@@ -123,10 +135,10 @@ static void s_diag_dispatch(void) {
 
 void xrc_net_set_enabled(bool on) {
 #if !XRC_DEBUG_BUILD
-    /* 发布构建：私服功能整体不可用（规则单一出处 = XRCNet.h 文件头）。
-       这里再拦一道，防任何漏网的调用点（安装点已在 Tweak.x 编译期剔除）。 */
-    if (on) xrc_logw(XRCLC_BOOT, @"[net] 发布构建不包含私服功能：忽略启用请求");
-    on = false;
+    /* 发布构建：联网阻断恒开、私服能力不存在——外部设置一律忽略（编译期锁死）。
+       规则单一出处 = XRCNet.h 文件头。 */
+    (void)on;
+    return;
 #endif
     bool was = atomic_exchange(&s_enabled, on);
     if (on && !was) s_diag_dispatch();   // 开启瞬间做一次自检
@@ -158,6 +170,17 @@ unsigned long long xrc_net_rewritten(void) { return atomic_load(&s_rewritten); }
 
 // 改写 scheme/host/port，保留 path/query/fragment
 static NSURL *s_rewrite(NSURL *url) {
+#if !XRC_DEBUG_BUILD
+    /* 发布构建：联网阻断——任何 http(s) 一律改写到保留域（本地资源不经本栈） */
+    if (!url || !url.host) return nil;
+    NSString *sch = url.scheme.lowercaseString;
+    if (![sch isEqualToString:@"http"] && ![sch isEqualToString:@"https"]) return nil;
+    NSURLComponents *b = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
+    b.scheme = @"http";
+    b.host = @(XRC_NET_BLOCK_HOST);
+    b.port = nil;
+    return b.URL;
+#else
     if (!s_base || !url) return nil;
     NSString *host = url.host;
     if (!host) return nil;
@@ -174,6 +197,7 @@ static NSURL *s_rewrite(NSURL *url) {
     c.host = base.host;
     c.port = base.port;
     return c.URL;
+#endif
 }
 
 static void s_log_request(NSURLRequest *req) {
@@ -190,7 +214,7 @@ static id s_init_with_request(id self, SEL _cmd, NSURLRequest *req, id delegate,
     atomic_fetch_add(&s_requests, 1);
     if (req) {
         @try {
-            if (atomic_load(&s_enabled)) {
+            if (s_should_rewrite()) {
                 NSURL *nu = s_rewrite(req.URL);
                 if (nu) {
                     NSMutableURLRequest *m = [req mutableCopy];
@@ -287,7 +311,7 @@ static void s_log_any_url(NSURLRequest *req, const char *tag) {
 }
 
 static id s_nsurlsession_task(id self_, SEL _cmd, NSURLRequest *req) {
-    if (req && atomic_load(&s_enabled)) {
+    if (req && s_should_rewrite()) {
         NSURL *nu = s_rewrite(req.URL);
         if (nu) {
             NSMutableURLRequest *m = [req mutableCopy];
@@ -338,7 +362,7 @@ static IMP s_orig_dlreq = NULL, s_orig_dlreqc = NULL, s_orig_dlurl = NULL, s_ori
 
 // 下载请求也过一遍白名单改写（与 API 请求同源规则；未命中原样返回）
 static NSURLRequest *s_rw_req(NSURLRequest *req) {
-    if (!req || !atomic_load(&s_enabled)) return req;
+    if (!req || !s_should_rewrite()) return req;
     NSURL *nu = s_rewrite(req.URL);
     if (!nu) return req;
     NSMutableURLRequest *m = [req mutableCopy];
@@ -554,7 +578,7 @@ static void s_install_other_stacks(void) {
 static NSURLRequest *s_will_send(id self_, SEL _cmd, NSURLConnection *c,
                                  NSURLRequest *req, NSURLResponse *resp) {
     @try {
-        if (req && atomic_load(&s_enabled)) {
+        if (req && s_should_rewrite()) {
             NSURL *nu = s_rewrite(req.URL);
             if (nu) {
                 NSMutableURLRequest *m = [req mutableCopy];
@@ -589,9 +613,6 @@ static void s_install_redirect_hook(void) {
 }
 
 void xrc_net_install(void) {
-#if !XRC_DEBUG_BUILD
-    return;   /* 发布构建：不安装（规则见 XRCNet.h 文件头） */
-#endif
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         s_match = s_default_match();
@@ -602,7 +623,12 @@ void xrc_net_install(void) {
         if (!m) { xrc_logd(XRCLC_NET, @"[net] method not found"); return; }
         s_orig_init = method_getImplementation(m);
         method_setImplementation(m, (IMP)s_init_with_request);
+#if !XRC_DEBUG_BUILD
+        xrc_logi(XRCLC_NET, @"[net] installed（发布构建：联网阻断模式——全部 http(s) → *.%@）",
+                 @(XRC_NET_BLOCK_HOST));
+#else
         xrc_logi(XRCLC_NET, @"[net] installed (match=%@)", [s_match componentsJoinedByString:@","]);
+#endif
         s_swizzle_result_logging();
         s_install_redirect_hook();
         s_install_other_stacks();

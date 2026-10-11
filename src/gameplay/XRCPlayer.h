@@ -39,6 +39,6 @@ bool xrc_player_pause(bool paused);
 
 // 暂停持有计数（多来源共用）：任一持有者持有则暂停，全部释放才恢复；未持有时
 // 释放为无害空操作。用途：面板「练习暂停」与 seek 冻结窗共用音频暂停——若各自
-// 直接调 xrc_player_pause，后收口的一方会误解除先持有方（真机形态：面板暂停中
-// 拖动 seek，冻结窗收口的"恢复"把音频放出来 ⇒ 谱面停、音乐响）。
+// 直接调 xrc_player_pause，后收口的一方会解除先持有方：音频与谱面随来源不同步
+// 恢复，音画一致性即被破坏。
 bool xrc_player_pause_hold(bool hold);

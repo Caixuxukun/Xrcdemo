@@ -16,4 +16,4 @@
 #endif
 
 // 显示版本（启动日志 / 面板标题统一用它）。
-#define XRC_VERSION  @"v10.0"
+#define XRC_VERSION  @"v1.0"

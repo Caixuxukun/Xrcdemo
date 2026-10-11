@@ -18,7 +18,7 @@
         ＋ 发光播放头；下方 当前时间 / 循环区间值 / 总时长；两端 ∓5s 菱形步进
     · 主区：左＝速度列（GeosansLight 大数字＋‹ › 箭头／音乐变速／回跳重播）
             右＝分区页签（循环·判定·解锁·网络·存储·诊断）＋ 可滚动内容
-            （网络＝开发构建专属：发布构建不渲染该页签；仅开发构建＋显式开启可用）
+            （网络：开发构建＝私服控制项，显式开启才生效；发布构建＝联网阻断声明页）
     · 底栏：继续（主按钮）｜复位循环（次按钮）｜版权行
   语义（保持 v3 语义，样式原生化）：
     · 开面板**不**暂停播放；触碰时间轴＝冻结播放＋实时对齐预览（轻量定位，不走重播事务）；
@@ -68,7 +68,11 @@
   .seg .opt{min-width:76px;height:26px;display:flex;align-items:center;justify-content:center;
     font-size:11px;color:#9a94aa;cursor:pointer;padding:0 12px}
   .seg .opt.sel{background:#4b4459;color:#fff}
-  body.release .tab[data-pane="net"],body.release .pane[data-pane="net"]{display:none}
+  .notice{display:none;font:12.5px 'NotoSC';color:rgba(226,220,240,.85);padding:10px 4px}
+  body.release .pane[data-pane="net"] .rowc,
+  body.release .pane[data-pane="net"] .stat,
+  body.release .pane[data-pane="net"] .hintline{display:none}
+  body.release .notice{display:block}
 
   /* ── 手机壳（横屏 852×393） ── */
   .phone{position:relative;width:852px;height:393px;border-radius:24px;overflow:hidden;
@@ -246,7 +250,7 @@
     <div class="panel">
 
       <div class="hdr">
-        <div class="t">PRACTICE</div><div class="ver" id="ver">v10.0 · e4af9aa</div>
+        <div class="t">PRACTICE</div><div class="ver" id="ver">v1.0 · 668a6f5</div>
         <div class="sp"></div>
         <div class="ic info" id="infoBtn" title="说明模式（长按任一行看单项说明）"></div>
         <div class="ic close" id="closeBtn" title="关闭并继续"><span class="xglyph">✕</span></div>
@@ -334,11 +338,12 @@
             </div>
 
             <!-- 网络 -->
-            <div class="pane" data-pane="net" data-hint="开发构建专属：仅编译时处于开发模式且显式开启本条目时可用；只改 API 域名（路径 / 参数原样、不动 TLS）">
+            <div class="pane" data-pane="net" data-hint="开发构建：私服重定向，显式开启才生效（只改 API 域名；路径 / 参数原样、不动 TLS）｜发布构建：联网已阻断，本页仅作声明">
               <div class="rowc on" id="swNet"><span class="nm">私服</span><span class="st">已开</span></div>
               <div class="rowc" id="netAddr"><span class="nm">服务端地址</span><span class="val">http://192.168.1.10:8080</span><span class="chevmark">▸</span></div>
               <div class="stat">改写 <span id="netN">21</span>/64 请求 ｜ 下载任务 2 建 / 2 完</div>
               <div class="stat" style="color:rgba(219,199,178,.8)">私服内容的版权 / 数据处理 / 安全性由使用者自负；默认练习能力不强制绑定私服。</div>
+              <div class="notice">未授权构建，不提供联网功能</div>
               <div class="hintline">展开地址行可直接编辑；保存后即刻生效。</div>
             </div>
 
@@ -501,10 +506,7 @@ document.getElementById('infoBtn').onclick=function(){document.body.classList.to
 document.getElementById('closeBtn').onclick=document.getElementById('resume').onclick=function(){};
 document.querySelectorAll('#buildSeg .opt').forEach(function(o){
   o.onclick=function(){document.querySelectorAll('#buildSeg .opt').forEach(x=>x.classList.remove('sel'));
-    o.classList.add('sel');var rel=o.dataset.mode==='release';
-    document.body.classList.toggle('release',rel);
-    var netTab=document.querySelector('#tabstrip .tab[data-pane="net"]');
-    if(rel&&netTab.classList.contains('sel'))document.querySelector('#tabstrip .tab[data-pane="loop"]').click();};});
+    o.classList.add('sel');document.body.classList.toggle('release',o.dataset.mode==='release');};});
 
 redraw();
 </script>

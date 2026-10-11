@@ -2,6 +2,12 @@ name: Build xrcdemo
 
 on:
   push:
+  workflow_dispatch:
+    inputs:
+      build_mode:
+        description: "构建模式：dev（开发构建，默认）或 release（发布构建）"
+        required: false
+        default: "dev"
 
 jobs:
   build:
@@ -14,6 +20,7 @@ jobs:
       DYLIB_OUT: libxrcdemo.dylib
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 1G
+      XRC_MODE: ${{ github.event.inputs.build_mode || 'dev' }}
 
     steps:
       - name: Checkout
@@ -64,7 +71,10 @@ jobs:
           make clean
           # 构建戳：写头文件（避免 shell 引号问题），日志首行打印
           printf '#define XRC_BUILD_STAMP "%s-%s"\n' "${GITHUB_SHA:0:7}" "$(date -u +%m%d%H%M)" > src/core/xrc_build_stamp.h
-          make XRC_DEBUG=1 TARGET_CC="ccache clang" TARGET_CXX="ccache clang++"
+          # 单模式构建：push 默认开发构建；workflow_dispatch 选 release 即发布构建。
+          if [ "$XRC_MODE" = "release" ]; then DBG=0; else DBG=1; fi
+          echo "build mode: $XRC_MODE (XRC_DEBUG=$DBG)"
+          make XRC_DEBUG=$DBG TARGET_CC="ccache clang" TARGET_CXX="ccache clang++"
           ccache -s || true
           mkdir -p out
           DYLIB="$(find .theos/obj -name 'xrcdemo.dylib' -not -path '*.dSYM*' | head -n1)"
@@ -115,7 +125,7 @@ jobs:
       - name: Upload dylibs
         uses: actions/upload-artifact@v4
         with:
-          name: libxrcdemo-sideload
+          name: ${{ env.XRC_MODE == 'release' && 'libxrcdemo-release' || 'libxrcdemo-sideload' }}
           path: |
             out/libxrcdemo.dylib
             out/libellekit.dylib

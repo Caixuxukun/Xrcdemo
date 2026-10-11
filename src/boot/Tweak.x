@@ -44,6 +44,11 @@ extern UIApplication *UIApp;
 
 static xrc_config_t g_cfg = {0};
 XRCFloatButton *button = nil;   // XRCLog.h extern（UI hook 引用）
+#if !XRC_DEBUG_BUILD
+// 发布构建：常驻可见水印（防滥用威慑 ＋ 泄漏溯源）。运行时绘制文本、不可交互、
+// 配置关不掉；与悬浮球同一套「窗口置顶」管理（见下方 UIWindow hook）。
+NSArray<UILabel *> *g_mark = nil;
+#endif
 
 #pragma mark - 主程序定位（唯一跨模块的 image base 实现）
 
@@ -113,12 +118,20 @@ uint64_t xrc_image_base(void) {
     %orig;
     if (view == button) return;
     if (button) %orig(button);
+#if !XRC_DEBUG_BUILD
+    if (g_mark && ![g_mark containsObject:(id)view])
+        for (UIView *m in g_mark) %orig(m);
+#endif
     // 练习面板自身管理层级（show 时已 bringSubviewToFront）
 }
 - (void)addSubview:(UIView *)view {
     %orig;
     if (view == button) return;
     if (button) [self bringSubviewToFront:button];
+#if !XRC_DEBUG_BUILD
+    if (g_mark && ![g_mark containsObject:(id)view])
+        for (UIView *m in g_mark) %orig(m);
+#endif
 }
 %end
 %end
@@ -150,6 +163,44 @@ static void initButton(void) {
     UIWindow *w = [[XRCMenuBridge shared] keyWindow];
     [button attachToWindow:w];
     if (!g_cfg.button_enabled) [button setHiddenState:YES];
+#if !XRC_DEBUG_BUILD
+    /* 运行时可见水印（发布构建）。设计取舍：
+       · 可溯源：右锚点含显示版本＋构建戳（sha+时间）——每一份构建可对回其源码时点；
+       · 难同时遮挡：左右双锚点（左下＝署名 / 右下＝版本戳），且随窗口置顶、
+         任何新视图加入都会被 UIWindow hook 重新提到最前（见上方 hook）；
+       · 不碍游玩：10.5pt、半透明白＋深色描影，贴屏幕底缘、避开判定线中心区，
+         不可交互、不吃触摸。 */
+    if (!g_mark && w) {
+        NSMutableArray *ms = [NSMutableArray array];
+        UILabel *(^mk)(NSString *) = ^UILabel *(NSString *text) {
+            UILabel *l = [[UILabel alloc] init];
+            l.text = text;
+            l.font = [UIFont systemFontOfSize:10.5 weight:UIFontWeightSemibold];
+            l.textColor = [UIColor colorWithWhite:1.0 alpha:0.55];
+            l.shadowColor = [UIColor colorWithWhite:0.0 alpha:0.7];
+            l.shadowOffset = CGSizeMake(1, 1);
+            l.userInteractionEnabled = NO;
+            [w addSubview:l];
+            [l sizeToFit];
+            [ms addObject:l];
+            return l;
+        };
+        UILabel *ml = mk(@"© 雾月星辰&MLXC · github@XingChenRS");
+        ml.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleRightMargin;
+        CGRect b1 = ml.frame;
+        b1.origin = CGPointMake(10, w.bounds.size.height - w.safeAreaInsets.bottom - b1.size.height - 5);
+        ml.frame = b1;
+        UILabel *mr = mk([NSString stringWithFormat:@"v%@ · %s", XRC_VERSION, XRC_BUILD_STAMP]);
+        mr.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleLeftMargin;
+        CGRect b2 = mr.frame;
+        b2.origin = CGPointMake(w.bounds.size.width - b2.size.width - 10,
+                                w.bounds.size.height - w.safeAreaInsets.bottom - b2.size.height - 5);
+        mr.frame = b2;
+        g_mark = ms;   // 持有双锚点（hook 逐个置顶）
+        for (UILabel *l in ms) [w bringSubviewToFront:l];
+        xrc_logi(XRCLC_BOOT, @"[boot] 发布构建水印已挂载（双锚点）");
+    }
+#endif
 }
 
 #pragma mark - bootstrap
@@ -175,18 +226,18 @@ static void doBootstrap(void) {
         // BRK 桩：处理器已在 %ctor 装好，这里只注册桩点（见 XRCProfile.h）。
         @try { xrc_brk_setup(base); }           @catch (NSException *e) { xrc_logw(XRCLC_BOOT, @"brk EX: %@", e); }
         xrc_apply_switches();   // 开关统一入口（%ctor 已调过一次；此处幂等刷新）
-        // 私服重定向（开发构建专属）：NSURLConnection 层改写 URL（不改 TLS；换域后 pin 自然放行）。
-        // 规则：发布构建（默认编译）不包含本功能；只有编译时处于开发模式、且显式开启
-        //      「私服」条目，才启用。私服内容的版权 / 数据处理 / 安全性由使用者自负；
-        //      本插件默认的练习能力不强制绑定私服。规则注释的单一出处见 XRCNet.h。
-#if XRC_DEBUG_BUILD
+        // 网络层装配（规则单一出处见 XRCNet.h 文件头）：
+        //   发布构建：装入**联网阻断器**——全部 http(s) 重写到保留域（编译期锁死，
+        //             下面的配置项调用会被整体忽略）；
+        //   开发构建：装入私服重定向（默认关，显式开启「私服」条目才生效）。
+        // 私服内容的版权 / 数据处理 / 安全性由使用者自负；
+        // 本插件默认的练习能力不强制绑定私服。
         @try {
             xrc_net_install();
             xrc_net_set_base(g_cfg.net_base ? g_cfg.net_base.UTF8String : NULL);
             xrc_net_set_match(g_cfg.net_match ? g_cfg.net_match.UTF8String : NULL);
             xrc_net_set_enabled(g_cfg.net_enabled);
         } @catch (NSException *e) { xrc_logw(XRCLC_BOOT, @"net EX: %@", e); }
-#endif
         @try {
             static dispatch_once_t tw_once;
             dispatch_once(&tw_once, ^{

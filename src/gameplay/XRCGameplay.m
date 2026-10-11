@@ -313,16 +313,16 @@ static void s_scrub_tick(void *self) {
 //   · L209：`if(!(ng+312&1)) { if(!(ng+313&1)) sub_10091D2F4; sub_10091D9A0; }`
 //     ⇒ ng+312 bit0 = 「判定 + 自动漏扫」块总闸；入场/位置刷新（L183 sub_10091C47C）
 //     无门控 ⇒ 关闸不影响拖动预览。
-//   · 为什么必须关：拖动把谱面钟按步平移，引擎每帧在**新位置**上跑"入场 + 漏扫"——
-//     每一步刚入场的音符 end < cur ⇒ 当场被判 LOST（真机"一大屏 lost 卡在判定面"，
-//     且冻结时特效计时不走、LOST 不淡出）。312 无运行期写者 ⇒ 断言写 1 安全；
+//   · 为什么必须关：拖动把谱面钟按步平移，引擎每帧在**新位置**上跑「入场＋漏扫」——
+//     每步刚入场的音符 end < cur，会被漏扫当场判 LOST（冻结时特效计时不走，
+//     判定文字不会自行消退）。312 无运行期写者 ⇒ 断言写 1 安全；
 //     仍按「保存-恢复 + 每帧断言 + 防场景重建（换 ng）」的纪律处理。
 //   · 路过跳过：暂停期间把**窗口内已越过的未消费音符**按引擎自己的快进语义标记
 //     "跳过"（vtable idx7 = 写 note+0x0C=1；引擎快进 sub_1009204E4 同款调用）——
 //     否则恢复播放瞬间会对被"路过"的音符补一波 miss。排除 SceneControl（谱面命令，
 //     标它不是"跳过"是"吞指令"）。
-//   · 冻结看护：驻停期间冻结计数被**任何来源**误扣到 0 就当场补回并留痕——
-//     防真机"谱面开始动、音频还停着"（冻结/音频持有脱钩）。
+//   · 冻结看护：驻停期间冻结计数被扣减到 0 时当场补回并留痕——冻结与音频持有
+//     必须成对（谱面静止期间两者任何一方脱钩都会破坏音画一致）。
 typedef int  (*s_pj_f5_t)(uint64_t note);
 typedef void (*s_pj_f7_t)(uint64_t note, uint64_t v);
 
@@ -390,7 +390,7 @@ static void s_pause_tick(void *ngp) {
         if (!(g & 1)) *(uint8_t *)((char *)ng + XRC_NG_JUDGE_GATE_OFF) = (uint8_t)(g | 1);
         int32_t cur = xrc_chart_clock_ms(ngp);
         if (cur >= 0) s_pause_pass_skip_tick(ng, cur);
-        /* 驻停看护：冻结被误扣 → 当场补回（日志上方 [clock] freeze 行可点名来源） */
+        /* 驻停看护：冻结计数归零即当场补回（日志上方 [clock] freeze 行可点名来源） */
         if (!atomic_load(&s_frz_state) && xrc_clock_freeze_count() == 0) {
             xrc_logw(XRCLC_JUDGE, @"[clock] 驻停冻结计数被扣到 0——当场补回（见上方 freeze 日志）");
             xrc_clock_freeze_inc();
