@@ -1075,8 +1075,15 @@ void xrc_replay_arc_visual_sweep(uint32_t cur_ms) {
         if ((int64_t)cur_ms - (int64_t)te <= 100) continue;               /* 未越过终点 */
         uint64_t f336 = 0;
         if (rd(rvt + 336, &f336, 8) && s_isptr(f336))
-            ((void (*)(uint64_t, uint64_t))f336)(rn, 0);                  /* 整体隐藏 */
+            ((void (*)(uint64_t, uint64_t))f336)(rn, 0);                  /* 整体隐藏（软杠杆） */
         rpf_arc_indicator_clear_one(rn);                                  /* 快照清零 */
+        /* 硬杠杆：置逻辑音符的**绘制门** note+0x0D=1（渲染遍历 slot6 直读；与引擎被判后的
+           状态一致——转引见本文件事件去重表段）。对象级隐藏会被照常 tick 的渲染对象顶回，
+           只会被"整帧不画"真正消灭。 */
+        {
+            uint8_t gd = 0;
+            if (rd(lg + 0x0D, &gd, 1) && !(gd & 1)) wr8(lg + 0x0D, (uint8_t)(gd | 1));
+        }
         nhid++;
     }
     if (nhid > 0)

@@ -284,9 +284,9 @@ static NSString *const kNoteSpeed =
     CGFloat fy = self.bounds.size.height - 10 - padB - xrc_theme_px(46);
     UIButton *go = [UIButton buttonWithType:UIButtonTypeCustom];
     go.frame = CGRectMake(x0, fy, xrc_theme_px(228), xrc_theme_px(44));
-    [go setBackgroundImage:xrc_theme_img9(@"layouts/1080/pause/resume_button.png", 15, 11, 15, 11)
+    [go setBackgroundImage:xrc_theme_img9(@"layouts/1080/pause/resume_button.png", 34, 12, 34, 12)
                    forState:UIControlStateNormal];
-    [go setBackgroundImage:xrc_theme_img9(@"layouts/1080/pause/resume_button_pressed.png", 15, 11, 15, 11)
+    [go setBackgroundImage:xrc_theme_img9(@"layouts/1080/pause/resume_button_pressed.png", 34, 12, 34, 12)
                    forState:UIControlStateHighlighted];
     [go setTitle:@"继续" forState:UIControlStateNormal];
     go.titleLabel.font = xrc_theme_font(@"NotoSansCJKsc-Regular", 16);
@@ -296,9 +296,9 @@ static NSString *const kNoteSpeed =
 
     UIButton *rl = [UIButton buttonWithType:UIButtonTypeCustom];
     rl.frame = CGRectMake(x0 + xrc_theme_px(242), fy, xrc_theme_px(168), xrc_theme_px(42));
-    [rl setBackgroundImage:xrc_theme_img9(@"layouts/1080/pause/button.png", 15, 11, 15, 11)
+    [rl setBackgroundImage:xrc_theme_img9(@"layouts/1080/pause/button.png", 45, 12, 45, 12)
                    forState:UIControlStateNormal];
-    [rl setBackgroundImage:xrc_theme_img9(@"layouts/1080/pause/button_pressed.png", 15, 11, 15, 11)
+    [rl setBackgroundImage:xrc_theme_img9(@"layouts/1080/pause/button_pressed.png", 45, 12, 45, 12)
                    forState:UIControlStateHighlighted];
     [rl setTitle:@"复位循环" forState:UIControlStateNormal];
     rl.titleLabel.font = xrc_theme_font(@"NotoSansCJKsc-Regular", 14.5);
@@ -387,7 +387,7 @@ static NSString *const kNoteSpeed =
                 forState:UIControlStateNormal];
         [b setTitleColor:XRC_TXT forState:UIControlStateSelected];
         UIImage *sel = xrc_theme_img(@"img/dialog_v2/tabs_selected.png");
-        if (sel) [b setBackgroundImage:[sel resizableImageWithCapInsets:UIEdgeInsetsMake(10, 10, 10, 10)]
+        if (sel) [b setBackgroundImage:sel
                               forState:UIControlStateSelected];
         b.tag = i;
         b.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleRightMargin;
@@ -404,7 +404,7 @@ static NSString *const kNoteSpeed =
     [area addSubview:self.paneHint];
     self.paneAct = [UIButton buttonWithType:UIButtonTypeCustom];
     self.paneAct.frame = CGRectMake(f.size.width - xrc_theme_px(98), hy - xrc_theme_px(6), xrc_theme_px(98), xrc_theme_px(30));
-    [self.paneAct setBackgroundImage:xrc_theme_img9(@"layouts/1080/pause/button.png", 15, 11, 15, 11)
+    [self.paneAct setBackgroundImage:xrc_theme_img9(@"layouts/1080/pause/button.png", 45, 12, 45, 12)
                             forState:UIControlStateNormal];
     [self.paneAct setTitle:@"应用" forState:UIControlStateNormal];
     self.paneAct.titleLabel.font = xrc_theme_font(@"NotoSansCJKsc-Regular", 12.5);
@@ -779,7 +779,7 @@ static NSString *const kNoteSpeed =
                         forState:UIControlStateNormal];
                 [b setTitleColor:XRC_TXT forState:UIControlStateSelected];
                 UIImage *sel = xrc_theme_img(@"img/dialog_v2/tabs_selected.png");
-                if (sel) [b setBackgroundImage:[sel resizableImageWithCapInsets:UIEdgeInsetsMake(8, 8, 8, 8)]
+                if (sel) [b setBackgroundImage:sel
                                       forState:UIControlStateSelected];
                 b.tag = i;
                 b.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleRightMargin;
@@ -833,7 +833,7 @@ static NSString *const kNoteSpeed =
     for (int i = 0; i < 4; i++) {
         UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
         b.frame = CGRectMake((bw + xrc_theme_px(8)) * (i % 2), by + xrc_theme_px(42) * (i / 2), bw, xrc_theme_px(38));
-        [b setBackgroundImage:xrc_theme_img9(@"layouts/1080/pause/button.png", 15, 11, 15, 11)
+        [b setBackgroundImage:xrc_theme_img9(@"layouts/1080/pause/button.png", 45, 12, 45, 12)
                      forState:UIControlStateNormal];
         [b setTitle:bn[i] forState:UIControlStateNormal];
         b.titleLabel.font = xrc_theme_font(@"NotoSansCJKsc-Regular", 13);

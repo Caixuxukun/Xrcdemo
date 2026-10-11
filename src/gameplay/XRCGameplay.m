@@ -384,6 +384,15 @@ static void s_pause_pass_skip_tick(uint64_t ng, int32_t cur) {
         if (((s_pj_f5_t)f5)(note) & 1) continue;                      // 已消费：跳过
         if (s_pj_is_scenecontrol(vt)) continue;
         ((s_pj_f7_t)f7)(note, 1);
+        /* **绘制门**：引擎判定写入者（sub_10089D50C，转引见 XRCReplay.m）在被判后还会置
+           note+0x0D=1 —— 渲染遍历的 slot6 直接读这个字节，非 0 即整帧不画（各类型通用）。
+           快进消费（f7）不含这一笔：只写 +0x0C 的话音符照样被绘制 ⇒ 被越过的弧/音符留在
+           判定面上（"拖动/seek 后黑点"的机械原因；对象级隐藏会被照常 tick 的渲染对象顶回）。
+           补上 = 与引擎自己被判后的状态一致（重播链"解除消费"正是把这两字节一起清）。 */
+        {
+            uint8_t gd = *(uint8_t *)(note + 0x0D);
+            if (!(gd & 1)) *(uint8_t *)(note + 0x0D) = (uint8_t)(gd | 1);
+        }
         s_pj_marked++;
     }
 }
