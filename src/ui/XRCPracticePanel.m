@@ -70,21 +70,32 @@ static NSString *const kNoteSpeed =
 @property (nonatomic, strong) XRCTimelineView *timeline;
 @property (nonatomic, strong) UILabel *tcur, *tmid, *ttot;
 @property (nonatomic, strong) UIButton *m5, *p5;
+@property (nonatomic, strong) UIView *speedBox;                 // 走带右端的速度组（‹ 1.00 ›）
 @property (nonatomic, strong) UILabel *speedNum;
-@property (nonatomic, strong) UIView *tabStrip;
-@property (nonatomic, strong) NSMutableArray<UIButton *> *tabs;
+@property (nonatomic, strong) UIButton *btnExpand;              // ⌃ 展开 / ⌄ 收起
+@property (nonatomic, assign) BOOL expanded;                    // 折叠（练习条）/ 展开（全屏面板）
+// 常驻 chips 行（循环与开关——进歌后高频操作，两种形态都在手边）
+@property (nonatomic, strong) UIButton *chipA, *chipB, *chipLoop, *chipReset;
+@property (nonatomic, strong) UIButton *stSpeedAudio, *stReplay;   // 开关 chip（选中色 = 已开）
+@property (nonatomic, strong) UIView *chipsRow;
+// 展开区：左竖导航 + 功能页
+@property (nonatomic, strong) UIScrollView *navScroll;
+@property (nonatomic, strong) NSMutableArray<UIButton *> *navBtns;
 @property (nonatomic, strong) UILabel *paneHint;
 @property (nonatomic, strong) UIButton *paneAct;          // 上下文动作（判定页＝应用）
 @property (nonatomic, strong) UIScrollView *pane;
+// 底栏
+@property (nonatomic, strong) UIButton *btnContinue;
+@property (nonatomic, strong) UILabel *cpLabel;
 @property (nonatomic, strong) NSTimer *timer;
 @property (nonatomic, assign) NSInteger lowTick;
 @property (nonatomic, assign) BOOL infoOn;
 @property (nonatomic, assign) BOOL pendingTo;
 @property (nonatomic, assign) NSInteger curTab;
 // 行状态引用（重建时重新捕获；refresh 镜像引擎真值）
-@property (nonatomic, strong) UILabel *stSpeedAudio, *stReplay, *stLoop, *stAutoplay;
+@property (nonatomic, strong) UILabel *stAutoplay;
 @property (nonatomic, strong) UILabel *stOwn, *stFv, *stDo, *stGate, *stCb, *stNet, *stStore, *stStubs;
-@property (nonatomic, strong) UILabel *valA, *valB, *valNet;
+@property (nonatomic, strong) UILabel *valNet;
 @property (nonatomic, strong) UILabel *netStat, *storeStat;
 @property (nonatomic, strong) NSArray<UILabel *> *chips;
 @property (nonatomic, strong) UILabel *patchLine, *judgeStatus;
@@ -123,14 +134,16 @@ static NSString *const kNoteSpeed =
     if (!w) { xrc_logw(XRCLC_UI, @"panel show: no key window"); return; }
     if (!self.superview) { [w addSubview:self]; [w bringSubviewToFront:self]; }
     self.frame = w.bounds;
+    self.expanded = NO;              // 每次打开先落折叠练习条（展开是刻意动作，不跨会话保留）
     [self buildIfNeeded];
+    [self applyMode];                // 尺寸/形态复位（首次构建内已含；重复打开这里补跑）
     [self rebuildPane];
     if (!self.timer) {
         self.timer = [NSTimer timerWithTimeInterval:0.1 target:self selector:@selector(tick) userInfo:nil repeats:YES];
         [[NSRunLoop mainRunLoop] addTimer:self.timer forMode:NSRunLoopCommonModes];
     }
     [self refresh];
-    xrc_logd(XRCLC_UI, @"panel shown (v4 fullscreen)");
+    xrc_logd(XRCLC_UI, @"panel shown (%s)", self.expanded ? "expanded" : "band");
 }
 
 - (void)hide {
@@ -151,64 +164,65 @@ static NSString *const kNoteSpeed =
 - (void)buildIfNeeded {
     if (self.subviews.count) return;
     self.backgroundColor = [UIColor clearColor];
-    CGFloat S = xrc_theme_scale();
-    CGFloat W = self.bounds.size.width, H = self.bounds.size.height;
-    if (W < 10) W = 852 * S, H = 393 * S;   // show 前被问到时兜底
 
-    // 暗化层（游戏素材，四角自渐隐；外扩 6% 让淡边落到窗口外，与 UI 稿一致）。
-    // 铺深紫底再叠素材：素材本身是"四角渐隐"的半透明贴图，仅铺它时亮场面（歌曲列表、
-    // 底部横幅）会从卡面外透出来，被误读成"按钮错位/重影"。
+    // 暗化层：**仅展开态**（折叠 = 练习条，不压暗游戏画面；打开不暂停、画面照常）
     CGRect df = CGRectInset(self.bounds, -self.bounds.size.width * 0.06, -self.bounds.size.height * 0.06);
     self.dim = [[UIImageView alloc] initWithFrame:df];
     self.dim.backgroundColor = [UIColor colorWithRed:10/255.0 green:6/255.0 blue:16/255.0 alpha:0.35];
     self.dim.image = xrc_theme_img(@"layouts/1080/pause/pause_background_shadow.png");
     self.dim.contentMode = UIViewContentModeScaleToFill;
-    self.dim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self addSubview:self.dim];
 
-    // 玻璃卡面 = pause_backing 九宫格 + 深紫底衬两层（与 UI 稿一致）。素材 1920×660 是
-    // 一条扁横条：y 0..121 与 y 537.. 是透明留白、y 502..537 是渐隐带——直接整张九宫格
-    // 会被拉伸成"上看不到卡、下看不清边"（即"面板显示不全"）。先裁到内容区（y 121..502），
-    // 再按裁剪后的像素取 insets：上 60px（含顶缘与白细线）、下 56px（密边带）、左右 87px。
-    CGRect pf = CGRectInset(self.bounds, 10, 10);
-    self.glass = [[UIImageView alloc] initWithFrame:pf];
+    // 卡面 = pause_backing 九宫格 + 深紫底衬（同一素材两种高度：折叠条 / 全屏卡）。
+    // 素材 1920×660 是扁横条：y0..121 与 y537.. 透明留白、y502..537 渐隐——先裁内容区
+    // （y121..502）再取 insets（上 60px 含顶缘白线、下 56px 密边、左右 87px）。
+    self.glass = [[UIImageView alloc] initWithFrame:CGRectInset(self.bounds, 10, 10)];
     self.glass.image = xrc_theme_img9_crop(@"layouts/1080/pause/pause_backing.png",
                                            CGRectMake(0, 121, 1920, 381), 87, 60, 87, 56);
     self.glass.backgroundColor = [UIColor colorWithRed:37/255.0 green:23/255.0 blue:42/255.0
                                                  alpha:self.glass.image ? 0.55 : 0.62];
-    self.glass.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    self.glass.layer.cornerRadius = 12;   // 只圆底色；不 masksToBounds（纹理自带圆角软边，不裁切）
-    self.glass.userInteractionEnabled = YES;   // UIImageView 默认不吃触摸：不开则整块卡面（含全部控件）点不动
+    self.glass.layer.cornerRadius = 12;   // 只圆底色；不 masksToBounds（纹理自带圆角软边）
+    self.glass.userInteractionEnabled = YES;   // UIImageView 默认不吃触摸
     [self addSubview:self.glass];
 
-    CGFloat padL = xrc_theme_px(26), padR = xrc_theme_px(26), padT = xrc_theme_px(2), padB = xrc_theme_px(10);
-    CGFloat cw = self.bounds.size.width - 20 - padL - padR;      // 卡面内容宽
-    CGFloat x0 = 10 + padL, y = 10 + padT;
+    CGFloat padL = xrc_theme_px(26), padR = xrc_theme_px(26), padT = xrc_theme_px(8);
+    CGFloat cw = self.glass.bounds.size.width - padL - padR;
+    CGFloat x0 = padL;
+    CGFloat y = padT;
 
-    // ── 标头：PRACTICE + 版本戳 ｜ ⓘ ✕ ──
-    self.hdr = [[UIView alloc] initWithFrame:CGRectMake(x0, y, cw, xrc_theme_px(36))];
-    self.hdr.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    // ── 标头：PRACTICE + 版本戳 ｜ ⓘ ⌃ ✕ ──
+    self.hdr = [[UIView alloc] initWithFrame:CGRectMake(x0, y, cw, xrc_theme_px(32))];
     [self.glass addSubview:self.hdr];
     {
         UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, xrc_theme_px(320), self.hdr.bounds.size.height)];
         t.text = @"PRACTICE";
-        t.font = xrc_theme_font(@"Exo-Light", 28);
+        t.font = xrc_theme_font(@"Exo-Light", 24);
         t.textColor = XRC_TXT;
         [self.hdr addSubview:t];
-        UILabel *v = [[UILabel alloc] initWithFrame:CGRectMake(xrc_theme_px(150), xrc_theme_px(10), xrc_theme_px(260), xrc_theme_px(16))];
+        UILabel *v = [[UILabel alloc] initWithFrame:CGRectMake(xrc_theme_px(128), xrc_theme_px(9), xrc_theme_px(300), xrc_theme_px(16))];
         v.text = [NSString stringWithFormat:@"%@ · %s", XRC_VERSION, XRC_BUILD_STAMP];
         v.font = xrc_theme_font(@"Exo-Regular", 12);
         v.textColor = XRC_DIM2;
         [self.hdr addSubview:v];
 
         UIButton *help = [UIButton buttonWithType:UIButtonTypeCustom];
-        help.frame = CGRectMake(self.hdr.bounds.size.width - xrc_theme_px(70), xrc_theme_px(3), xrc_theme_px(30), xrc_theme_px(30));
+        help.frame = CGRectMake(self.hdr.bounds.size.width - xrc_theme_px(104), xrc_theme_px(1), xrc_theme_px(30), xrc_theme_px(30));
         help.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
         [help setImage:xrc_theme_img(@"layouts/mainmenu/help_button.png") forState:UIControlStateNormal];
         [help addTarget:self action:@selector(toggleInfo) forControlEvents:UIControlEventTouchUpInside];
         [self.hdr addSubview:help];
+
+        self.btnExpand = [UIButton buttonWithType:UIButtonTypeCustom];
+        self.btnExpand.frame = CGRectMake(self.hdr.bounds.size.width - xrc_theme_px(70), xrc_theme_px(0), xrc_theme_px(32), xrc_theme_px(30));
+        self.btnExpand.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+        [self.btnExpand setTitle:@"⌃" forState:UIControlStateNormal];
+        self.btnExpand.titleLabel.font = xrc_theme_font(@"L2-Semibold", 17);
+        [self.btnExpand setTitleColor:XRC_DIM forState:UIControlStateNormal];
+        [self.btnExpand addTarget:self action:@selector(toggleExpand) forControlEvents:UIControlEventTouchUpInside];
+        [self.hdr addSubview:self.btnExpand];
+
         UIButton *x = [UIButton buttonWithType:UIButtonTypeCustom];
-        x.frame = CGRectMake(self.hdr.bounds.size.width - xrc_theme_px(36), xrc_theme_px(6), xrc_theme_px(28), xrc_theme_px(28));
+        x.frame = CGRectMake(self.hdr.bounds.size.width - xrc_theme_px(36), xrc_theme_px(3), xrc_theme_px(28), xrc_theme_px(28));
         x.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
         UIImage *closeImg = xrc_theme_img(@"layouts/mainmenu/close.png");
         if (closeImg) [x setImage:closeImg forState:UIControlStateNormal];
@@ -216,26 +230,43 @@ static NSString *const kNoteSpeed =
         [x addTarget:self action:@selector(hide) forControlEvents:UIControlEventTouchUpInside];
         [self.hdr addSubview:x];
     }
-    y += self.hdr.bounds.size.height;
+    y += xrc_theme_px(32);
 
-    // ── 时间轴带 ──
-    CGFloat tzH = xrc_theme_px(74);
-    CGFloat ds = xrc_theme_px(34);
+    // ── 走带：∓5s ｜ 时间轴 ｜ 速度（‹ 1.00 ›）。两种形态下帧完全相同—— ──
+    // 形态切换不动时间轴几何（拖动会话不受切换打扰；另有 500ms 守卫）。
+    CGFloat bandY = y + xrc_theme_px(4);
+    CGFloat ds = xrc_theme_px(30);
     self.m5 = [self diamondButton:@"−" action:@selector(jumpBack)];
-    self.m5.frame = CGRectMake(x0, y + xrc_theme_px(4), ds, ds);
+    self.m5.frame = CGRectMake(x0, bandY + xrc_theme_px(7), ds, ds);
     [self.glass addSubview:self.m5];
+
+    CGFloat spW = xrc_theme_px(126);
+    self.speedBox = [[UIView alloc] initWithFrame:CGRectMake(x0 + cw - spW, bandY + xrc_theme_px(4), spW, xrc_theme_px(36))];
+    [self.glass addSubview:self.speedBox];
+    UIButton *dn = [self chevronButton:NO action:@selector(speedDown:)];
+    dn.frame = CGRectMake(0, xrc_theme_px(2), xrc_theme_px(24), xrc_theme_px(32));
+    [self.speedBox addSubview:dn];
+    UIButton *up = [self chevronButton:YES action:@selector(speedUp:)];
+    up.frame = CGRectMake(spW - xrc_theme_px(24), xrc_theme_px(2), xrc_theme_px(24), xrc_theme_px(32));
+    [self.speedBox addSubview:up];
+    self.speedNum = [[UILabel alloc] initWithFrame:CGRectMake(xrc_theme_px(24), 0, spW - xrc_theme_px(48), xrc_theme_px(36))];
+    self.speedNum.text = @"1.00";
+    self.speedNum.textAlignment = NSTextAlignmentCenter;
+    self.speedNum.font = xrc_theme_font(@"GeosansLight", 28);
+    self.speedNum.adjustsFontSizeToFitWidth = YES;
+    self.speedNum.textColor = XRC_TXT;
+    [self.speedBox addSubview:self.speedNum];
     self.p5 = [self diamondButton:@"+" action:@selector(jumpForward)];
-    self.p5.frame = CGRectMake(x0 + cw - ds, y + xrc_theme_px(4), ds, ds);
-    self.p5.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+    self.p5.frame = CGRectMake(self.speedBox.frame.origin.x - xrc_theme_px(6) - ds, bandY + xrc_theme_px(7), ds, ds);
     [self.glass addSubview:self.p5];
 
-    CGFloat tw = cw - ds * 2 - xrc_theme_px(24);
-    self.timeline = [[XRCTimelineView alloc] initWithFrame:CGRectMake(x0 + ds + xrc_theme_px(12), y, tw, xrc_theme_px(46))];
-    self.timeline.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    CGFloat tlX = x0 + ds + xrc_theme_px(10);
+    CGFloat tlW = self.p5.frame.origin.x - xrc_theme_px(10) - tlX;
+    self.timeline = [[XRCTimelineView alloc] initWithFrame:CGRectMake(tlX, bandY, tlW, xrc_theme_px(44))];
     __weak typeof(self) weakTL = self;
     self.timeline.onScrubBegin = ^{
         __strong typeof(self) sf = weakTL; if (!sf) return;
-        if (!xrc_gameplay_in_song()) return;      // 非对局（菜单）：不冻结（timeline 有占位长度，用它判不对）
+        if (!xrc_gameplay_in_song()) return;      // 非对局（菜单）：不冻结
         sf.pendingTo = NO;
         xrc_gameplay_pause(true);
     };
@@ -249,8 +280,8 @@ static NSString *const kNoteSpeed =
         if (start > ms + 300)                     // 深回退：重播事务接管（重置/复活/重建）
             xrc_gameplay_request(XRC_OP_SEEK_REPLAY, ms);
         // 浅回退/前进：不跑重播事务——事务尾的指示器全量清零会把**正在播放中的弧头光柱**
-        // 也清掉（只在头段换段时自愈 ⇒ 停在弧中段时"弧的头没了"），且被越过的残留已由
-        // 「路过跳过＋绘制门(+0x0D)＋视觉清扫」就地处理，无需事务。
+        // 也清掉（只在头段换段时自愈），且被越过的残留已由「路过跳过＋绘制门＋视觉清扫」
+        // 就地处理（含长条/弧段表预标记），无需事务。
     };
     self.timeline.onLoopRangeChanged = ^(double from, double to, BOOL finished) {
         __strong typeof(self) sf = weakTL; if (!sf) return;
@@ -262,166 +293,190 @@ static NSString *const kNoteSpeed =
     };
     [self.glass addSubview:self.timeline];
 
-    // 时间轴读数行：当前 ｜ A/B ｜ 总长
+    // 读数行：当前 ｜ A/B ｜ 总长
     {
-        CGFloat my = y + xrc_theme_px(48);
-        self.tcur = [self monoLabel:x0 w:xrc_theme_px(150) y:my size:17 color:XRC_TXT];
-        self.tmid = [self monoLabel:x0 + xrc_theme_px(150) w:cw - xrc_theme_px(320) y:my size:12.5 color:XRC_LAV];
+        CGFloat my = bandY + xrc_theme_px(46);
+        self.tcur = [self monoLabel:x0 w:xrc_theme_px(150) y:my size:15 color:XRC_TXT];
+        self.tmid = [self monoLabel:x0 + xrc_theme_px(150) w:cw - xrc_theme_px(320) y:my size:12 color:XRC_LAV];
         self.tmid.textAlignment = NSTextAlignmentCenter;
-        self.ttot = [self monoLabel:x0 + cw - xrc_theme_px(170) w:xrc_theme_px(170) y:my size:17 color:XRC_DIM2];
+        self.ttot = [self monoLabel:x0 + cw - xrc_theme_px(170) w:xrc_theme_px(170) y:my size:15 color:XRC_DIM2];
         self.ttot.textAlignment = NSTextAlignmentRight;
-        self.ttot.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
-        self.tmid.autoresizingMask = UIViewAutoresizingFlexibleWidth;
     }
-    y += tzH;
+    y = bandY + xrc_theme_px(66);
 
-    // ── 主区 ──
-    CGFloat footH = xrc_theme_px(56);
-    CGFloat mainH = self.bounds.size.height - 10 - padB - y - footH;
-    CGFloat speedW = xrc_theme_px(178);
-    [self buildSpeedColumn:CGRectMake(x0, y, speedW, mainH)];
-    [self buildTabArea:CGRectMake(x0 + speedW + xrc_theme_px(18), y,
-                                  cw - speedW - xrc_theme_px(18), mainH)];
-
-    // ── 底栏 ──
-    CGFloat fy = self.bounds.size.height - 10 - padB - xrc_theme_px(46);
-    UIButton *go = [UIButton buttonWithType:UIButtonTypeCustom];
-    go.frame = CGRectMake(x0, fy, xrc_theme_px(228), xrc_theme_px(44));
-    [go setBackgroundImage:xrc_theme_img9(@"layouts/1080/pause/resume_button.png", 34, 12, 34, 12)
-                   forState:UIControlStateNormal];
-    [go setBackgroundImage:xrc_theme_img9(@"layouts/1080/pause/resume_button_pressed.png", 34, 12, 34, 12)
-                   forState:UIControlStateHighlighted];
-    [go setTitle:@"继续" forState:UIControlStateNormal];
-    go.titleLabel.font = xrc_theme_font(@"NotoSansCJKsc-Regular", 16);
-    [go setTitleColor:XRC_TXT forState:UIControlStateNormal];
-    [go addTarget:self action:@selector(hide) forControlEvents:UIControlEventTouchUpInside];
-    [self.glass addSubview:go];
-
-    UIButton *rl = [UIButton buttonWithType:UIButtonTypeCustom];
-    rl.frame = CGRectMake(x0 + xrc_theme_px(242), fy, xrc_theme_px(168), xrc_theme_px(42));
-    [rl setBackgroundImage:xrc_theme_img9(@"layouts/1080/pause/button.png", 45, 12, 45, 12)
-                   forState:UIControlStateNormal];
-    [rl setBackgroundImage:xrc_theme_img9(@"layouts/1080/pause/button_pressed.png", 45, 12, 45, 12)
-                   forState:UIControlStateHighlighted];
-    [rl setTitle:@"复位循环" forState:UIControlStateNormal];
-    rl.titleLabel.font = xrc_theme_font(@"NotoSansCJKsc-Regular", 14.5);
-    [rl setTitleColor:XRC_TXT forState:UIControlStateNormal];
-    [rl addTarget:self action:@selector(resetLoop) forControlEvents:UIControlEventTouchUpInside];
-    [self.glass addSubview:rl];
-
-    UILabel *cp = [[UILabel alloc] initWithFrame:CGRectMake(x0 + cw - xrc_theme_px(280), fy + xrc_theme_px(16),
-                                                            xrc_theme_px(280), xrc_theme_px(14))];
-    cp.text = @"© 雾月星辰&MLXC/github@XingChenRS";
-    cp.font = xrc_theme_font(@"L2-Regular", 9.5);
-    cp.textColor = [UIColor colorWithRed:180/255.0 green:172/255.0 blue:200/255.0 alpha:0.5];
-    cp.textAlignment = NSTextAlignmentRight;
-    cp.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
-    [self.glass addSubview:cp];
-}
-
-// 速度列：大数字 + ‹ › 箭头（点按 ±0.05 / 长按连续 ±0.25）+ 两个开关行
-- (void)buildSpeedColumn:(CGRect)f {
-    UIView *col = [[UIView alloc] initWithFrame:f];
-    col.autoresizingMask = UIViewAutoresizingFlexibleHeight | UIViewAutoresizingFlexibleRightMargin;
-    [self.glass addSubview:col];
-    CGFloat ch = xrc_theme_px(44);
-    UIButton *dn = [self chevronButton:NO action:@selector(speedDown:)];
-    dn.frame = CGRectMake(0, xrc_theme_px(6), xrc_theme_px(30), ch);
-    [col addSubview:dn];
-    UIButton *up = [self chevronButton:YES action:@selector(speedUp:)];
-    up.frame = CGRectMake(f.size.width - xrc_theme_px(30), xrc_theme_px(6), xrc_theme_px(30), ch);
-    up.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
-    [col addSubview:up];
-    self.speedNum = [[UILabel alloc] initWithFrame:CGRectMake(xrc_theme_px(34), xrc_theme_px(2),
-                                                              f.size.width - xrc_theme_px(68), xrc_theme_px(52))];
-    self.speedNum.text = @"1.00";
-    self.speedNum.textAlignment = NSTextAlignmentCenter;
-    self.speedNum.font = xrc_theme_font(@"GeosansLight", 56);
-    self.speedNum.adjustsFontSizeToFitWidth = YES;
-    self.speedNum.textColor = XRC_TXT;
-    self.speedNum.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    [col addSubview:self.speedNum];
-    UILabel *cap = [[UILabel alloc] initWithFrame:CGRectMake(0, xrc_theme_px(54), f.size.width, xrc_theme_px(14))];
-    cap.text = @"速度 · ±0.05｜长按步进 ±0.25";
-    cap.textAlignment = NSTextAlignmentCenter;
-    cap.font = xrc_theme_font(@"NotoSansCJKsc-Regular", 10);
-    cap.textColor = XRC_DIM2;
-    cap.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    [col addSubview:cap];
-
-    CGFloat ry = xrc_theme_px(78);
-    self.stSpeedAudio = [self toggleRowIn:col y:ry title:@"音乐变速" on:xrc_audio_speed_enabled()
-                                    block:^{ [self toggleSpeedAudio]; } note:kNoteSpeed];
-    ry += xrc_theme_px(40);
-    self.stReplay = [self toggleRowIn:col y:ry title:@"回跳重播" on:xrc_replay_enabled()
-                                block:^{ [self toggleReplay]; }
-                                 note:@"回跳到已游玩并判定过的谱面段落时，支持重新游玩该段，同时清空分数记录。"];
-}
-
-// 页签区：页签条 + 提示行 + 可滚动内容
-- (void)buildTabArea:(CGRect)f {
-    UIView *area = [[UIView alloc] initWithFrame:f];
-    [self.glass addSubview:area];
-
-    self.tabStrip = [[UIView alloc] initWithFrame:CGRectMake(0, 0, f.size.width, xrc_theme_px(31))];
-    self.tabStrip.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    UIImage *strip = xrc_theme_img(@"img/dialog_v2/tabs_background.png");
-    if (strip) {
-        UIImageView *bg = [[UIImageView alloc] initWithFrame:self.tabStrip.bounds];
-        bg.image = strip;
-        bg.contentMode = UIViewContentModeScaleToFill;
-        bg.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        [self.tabStrip addSubview:bg];
-    } else {
-        self.tabStrip.backgroundColor = [UIColor colorWithRed:78/255.0 green:61/255.0 blue:92/255.0 alpha:1.0];
-        self.tabStrip.layer.cornerRadius = 8;
+    // ── 常驻 chips 行：循环四件（设A/设B/循环/重置）+ 两个开关（音乐变速/回跳重播）──
+    // 进歌后最高频的操作，折叠条与展开面板都在手边（不再有独立的「循环」页＝同一功能两份）。
+    self.chipsRow = [[UIView alloc] initWithFrame:CGRectMake(x0, y, cw, xrc_theme_px(32))];
+    [self.glass addSubview:self.chipsRow];
+    {
+        CGFloat chipW = xrc_theme_px(88), gap = xrc_theme_px(8);
+        self.chipA     = [self chipButtonIn:self.chipsRow x:0                     width:chipW title:@"设 A" action:@selector(setFrom)      note:kNoteLoop];
+        self.chipB     = [self chipButtonIn:self.chipsRow x:chipW + gap           width:chipW title:@"设 B" action:@selector(setTo)        note:kNoteLoop];
+        self.chipLoop  = [self chipButtonIn:self.chipsRow x:(chipW + gap) * 2     width:chipW title:@"循环" action:@selector(toggleRepeat) note:kNoteLoop];
+        self.chipReset = [self chipButtonIn:self.chipsRow x:(chipW + gap) * 3     width:chipW title:@"重置" action:@selector(resetLoop)    note:kNoteLoop];
+        CGFloat sw = xrc_theme_px(104);
+        CGFloat sx = cw - (sw + gap) * 2;
+        self.stSpeedAudio = [self chipButtonIn:self.chipsRow x:sx               width:sw title:@"音乐变速" action:@selector(toggleSpeedAudio) note:kNoteSpeed];
+        self.stReplay     = [self chipButtonIn:self.chipsRow x:sx + sw + gap    width:sw title:@"回跳重播" action:@selector(toggleReplay)
+                                         note:@"回跳到已游玩并判定过的谱面段落时，支持重新游玩该段，同时清空分数记录。"];
     }
-    [area addSubview:self.tabStrip];
+    y += xrc_theme_px(32);
 
-    NSArray *names = @[@"循环", @"判定", @"解锁", @"网络", @"存储", @"诊断"];
-    self.tabs = [NSMutableArray array];
-    CGFloat tw = f.size.width / names.count;
-    for (int i = 0; i < (int)names.count; i++) {
-        UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
-        b.frame = CGRectMake(tw * i, 0, tw, xrc_theme_px(31));
-        [b setTitle:names[i] forState:UIControlStateNormal];
-        b.titleLabel.font = xrc_theme_font(@"L2-Semibold", 13.5);
-        [b setTitleColor:[UIColor colorWithRed:226/255.0 green:218/255.0 blue:242/255.0 alpha:0.62]
-                forState:UIControlStateNormal];
-        [b setTitleColor:XRC_TXT forState:UIControlStateSelected];
-        UIImage *sel = xrc_theme_img(@"img/dialog_v2/tabs_selected.png");
-        if (sel) [b setBackgroundImage:sel
-                              forState:UIControlStateSelected];
-        b.tag = i;
-        b.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleRightMargin;
-        [b addTarget:self action:@selector(tabTapped:) forControlEvents:UIControlEventTouchUpInside];
-        [self.tabStrip addSubview:b];
-        [self.tabs addObject:b];
+    // ── 展开区：左竖导航 + 功能页（折叠时整块隐藏；帧由 applyMode 置）──
+    self.navScroll = [[UIScrollView alloc] initWithFrame:CGRectMake(x0, y, xrc_theme_px(78), xrc_theme_px(120))];
+    self.navScroll.showsVerticalScrollIndicator = NO;
+    [self.glass addSubview:self.navScroll];
+    self.navBtns = [NSMutableArray array];
+    {
+        NSArray *names = @[@"判定", @"解锁", @"网络", @"存储", @"诊断"];
+        CGFloat navW = xrc_theme_px(78), rowH = xrc_theme_px(46);
+        for (int i = 0; i < (int)names.count; i++) {
+            UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
+            b.frame = CGRectMake(0, (rowH + xrc_theme_px(6)) * i, navW, rowH);
+            [b setTitle:names[i] forState:UIControlStateNormal];
+            b.titleLabel.font = xrc_theme_font(@"L2-Semibold", 14);
+            [b setTitleColor:[UIColor colorWithRed:226/255.0 green:218/255.0 blue:242/255.0 alpha:0.62]
+                    forState:UIControlStateNormal];
+            [b setTitleColor:XRC_TXT forState:UIControlStateSelected];
+            b.layer.cornerRadius = 9;
+            b.tag = i;
+            [b addTarget:self action:@selector(navTapped:) forControlEvents:UIControlEventTouchUpInside];
+            [self.navScroll addSubview:b];
+            [self.navBtns addObject:b];
+        }
+        self.navScroll.contentSize = CGSizeMake(navW, (rowH + xrc_theme_px(6)) * names.count);
     }
-
-    CGFloat hy = xrc_theme_px(31) + xrc_theme_px(3);
-    self.paneHint = [[UILabel alloc] initWithFrame:CGRectMake(xrc_theme_px(2), hy, f.size.width - xrc_theme_px(104), xrc_theme_px(18))];
+    self.paneHint = [[UILabel alloc] initWithFrame:CGRectMake(x0, y, cw, xrc_theme_px(18))];
     self.paneHint.font = xrc_theme_font(@"NotoSansCJKsc-Light", 11.5);
     self.paneHint.textColor = XRC_DIM2;
-    self.paneHint.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    [area addSubview:self.paneHint];
+    [self.glass addSubview:self.paneHint];
     self.paneAct = [UIButton buttonWithType:UIButtonTypeCustom];
-    self.paneAct.frame = CGRectMake(f.size.width - xrc_theme_px(98), hy - xrc_theme_px(6), xrc_theme_px(98), xrc_theme_px(30));
+    self.paneAct.frame = CGRectMake(x0 + cw - xrc_theme_px(98), y - xrc_theme_px(6), xrc_theme_px(98), xrc_theme_px(30));
     [self.paneAct setBackgroundImage:xrc_theme_img9(@"layouts/1080/pause/button.png", 45, 12, 45, 12)
                             forState:UIControlStateNormal];
+    [self.paneAct setBackgroundImage:xrc_theme_img9(@"layouts/1080/pause/button_pressed.png", 45, 12, 45, 12)
+                            forState:UIControlStateHighlighted];
     [self.paneAct setTitle:@"应用" forState:UIControlStateNormal];
     self.paneAct.titleLabel.font = xrc_theme_font(@"NotoSansCJKsc-Regular", 12.5);
     [self.paneAct setTitleColor:XRC_TXT forState:UIControlStateNormal];
     self.paneAct.hidden = YES;
-    self.paneAct.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+    self.paneAct.tag = -1;
     [self.paneAct addTarget:self action:@selector(applyJudge) forControlEvents:UIControlEventTouchUpInside];
-    [area addSubview:self.paneAct];
-
-    CGFloat py = hy + xrc_theme_px(22);
-    self.pane = [[UIScrollView alloc] initWithFrame:CGRectMake(0, py, f.size.width, f.size.height - py)];
+    [self.glass addSubview:self.paneAct];
+    self.pane = [[UIScrollView alloc] initWithFrame:CGRectMake(x0, y, cw, xrc_theme_px(120))];
     self.pane.showsVerticalScrollIndicator = YES;
-    self.pane.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    [area addSubview:self.pane];
+    [self.glass addSubview:self.pane];
+
+    // ── 底栏：继续（游戏暂停界面 resumeButton 原生规格：178.4×37.7 原始比例直绘，
+    //    不切片不拉伸——拉伸会把素材内部折角挤到错位）+ 署名 ──
+    self.btnContinue = [UIButton buttonWithType:UIButtonTypeCustom];
+    [self.btnContinue setBackgroundImage:xrc_theme_img(@"layouts/1080/pause/resume_button.png")
+                                forState:UIControlStateNormal];
+    [self.btnContinue setBackgroundImage:xrc_theme_img(@"layouts/1080/pause/resume_button_pressed.png")
+                                forState:UIControlStateHighlighted];
+    [self.btnContinue setTitle:@"继续" forState:UIControlStateNormal];
+    self.btnContinue.titleLabel.font = xrc_theme_font(@"NotoSansCJKsc-Regular", 20);   // 原生文本/按钮高约 46%
+    [self.btnContinue setTitleColor:XRC_TXT forState:UIControlStateNormal];
+    [self.btnContinue addTarget:self action:@selector(hide) forControlEvents:UIControlEventTouchUpInside];
+    [self.glass addSubview:self.btnContinue];
+
+    self.cpLabel = [[UILabel alloc] init];
+    self.cpLabel.text = @"© 雾月星辰&MLXC/github@XingChenRS";
+    self.cpLabel.font = xrc_theme_font(@"L2-Regular", 9.5);
+    self.cpLabel.textColor = [UIColor colorWithRed:180/255.0 green:172/255.0 blue:200/255.0 alpha:0.5];
+    self.cpLabel.textAlignment = NSTextAlignmentRight;
+    [self.glass addSubview:self.cpLabel];
+
+    [self applyMode];   // 置全部帧 + 形态可见性
+}
+
+// chips 工厂：九宫格小按钮（常驻行的循环四件与开关）
+- (UIButton *)chipButtonIn:(UIView *)parent x:(CGFloat)x width:(CGFloat)w
+                     title:(NSString *)title action:(SEL)sel note:(NSString *)note {
+    UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
+    b.frame = CGRectMake(x, xrc_theme_px(1), w, xrc_theme_px(30));
+    [b setBackgroundImage:xrc_theme_img9(@"layouts/1080/pause/button.png", 45, 12, 45, 12)
+                 forState:UIControlStateNormal];
+    [b setBackgroundImage:xrc_theme_img9(@"layouts/1080/pause/button_pressed.png", 45, 12, 45, 12)
+                 forState:UIControlStateHighlighted];
+    [b setTitle:title forState:UIControlStateNormal];
+    b.titleLabel.font = xrc_theme_font(@"NotoSansCJKsc-Regular", 13.5);
+    [b setTitleColor:XRC_TXT forState:UIControlStateNormal];
+    [b addTarget:self action:sel forControlEvents:UIControlEventTouchUpInside];
+    if (note.length) {
+        [b addGestureRecognizer:[[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(rowNote:)]];
+        objc_setAssociatedObject(b, "xrc_note", note, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    [parent addSubview:b];
+    return b;
+}
+
+#pragma mark - 形态（折叠练习条 / 展开全屏）
+
+// 折叠 = 常驻四行（标头/走带/读数/chips）+ 底栏拼成一条，只占屏顶一条、不压暗游戏；
+// 展开 = 同一批常驻行之上再放「左竖导航 + 功能页」，底栏落屏底。
+// 四行常驻帧在两种形态下**完全相同** ⇒ 形态切换不动时间轴几何（拖动会话不被切换打扰）。
+- (void)applyMode {
+    if (!self.glass) return;
+    CGFloat W = self.bounds.size.width, H = self.bounds.size.height;
+    if (W < 10) return;
+    CGFloat padL = xrc_theme_px(26), padR = xrc_theme_px(26), padB = xrc_theme_px(8);
+    CGFloat barH = xrc_theme_px(200);                       // 折叠条总高（四行 + 底栏）
+    CGFloat glassH = self.expanded ? (H - 20) : barH;
+    CGRect gf = self.glass.frame;
+    gf.origin = CGPointMake(10, 10);
+    gf.size = CGSizeMake(W - 20, glassH);
+    self.glass.frame = gf;
+    self.dim.alpha = self.expanded ? 1.0 : 0.0;             // 折叠不压暗（打开面板不停歌）
+    [self.btnExpand setTitle:(self.expanded ? @"⌄" : @"⌃") forState:UIControlStateNormal];
+
+    // 底栏（两种形态都在 glass 底部：折叠=条底最后一行；展开=屏底）
+    CGFloat fy = glassH - padB - xrc_theme_px(44);
+    self.btnContinue.frame = CGRectMake(padL, fy + xrc_theme_px(3), xrc_theme_px(178.4), xrc_theme_px(37.7));
+    self.cpLabel.frame = CGRectMake(W - 20 - padR - xrc_theme_px(280), fy + xrc_theme_px(15),
+                                    xrc_theme_px(280), xrc_theme_px(14));
+
+    // 展开区
+    BOOL ex = self.expanded;
+    self.navScroll.hidden = self.pane.hidden = self.paneHint.hidden = !ex;
+    if (!ex) self.paneAct.hidden = YES;
+    else     self.paneAct.hidden = (self.paneAct.tag <= 0);   // 由 rebuildPane 决定
+    if (ex) {
+        CGFloat navW = xrc_theme_px(78);
+        CGFloat contentY = xrc_theme_px(148);                 // 四行常驻之下
+        CGFloat contentH = MAX(xrc_theme_px(80), fy - xrc_theme_px(8) - contentY);
+        self.navScroll.frame = CGRectMake(padL, contentY, navW, contentH);
+        CGFloat pageX = padL + navW + xrc_theme_px(14);
+        CGFloat pageW = (W - 20) - pageX - padR;
+        self.paneHint.frame = CGRectMake(pageX, contentY, pageW - xrc_theme_px(104), xrc_theme_px(18));
+        self.paneAct.frame = CGRectMake(pageX + pageW - xrc_theme_px(98), contentY - xrc_theme_px(6),
+                                        xrc_theme_px(98), xrc_theme_px(30));
+        self.pane.frame = CGRectMake(pageX, contentY + xrc_theme_px(22), pageW, contentH - xrc_theme_px(22));
+    }
+}
+
+- (void)toggleExpand {
+    // 拖动/驻停窗口内不切换形态：常驻行几何虽不随形态变化，但切换会改变触摸区域与
+    // 视觉焦点，进行中切换没有意义且有扰动风险（松手 500ms 后可切）。
+    if (xrc_real_now_us() - xrc_gameplay_scrub_us() < 500000ULL) return;
+    self.expanded = !self.expanded;
+    if (self.expanded) [self rebuildPane];
+    [UIView animateWithDuration:0.22 animations:^{ [self applyMode]; }];
+    [self refresh];
+    xrc_logd(XRCLC_UI, @"panel mode: %s", self.expanded ? "expanded" : "collapsed");
+}
+
+// 折叠态下，面板只拦截练习条范围内的触摸；其余区域透传给游戏（打开面板不停歌，
+// 游戏在条外照常可玩/可点）。展开态卡面近全屏，行为与既有一致。
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    UIView *v = [super hitTest:point withEvent:event];
+    if (v == self) return nil;
+    return v;
+}
+
+- (void)navTapped:(UIButton *)b {
+    self.curTab = b.tag;
+    [self rebuildPane];
 }
 
 #pragma mark - 小组件工厂
@@ -619,44 +674,30 @@ static NSString *const kNoteSpeed =
 
 #pragma mark - 页签
 
-- (void)tabTapped:(UIButton *)b {
-    self.curTab = b.tag;
-    [self rebuildPane];
-}
-
 - (void)rebuildPane {
     if (!self.pane) return;
     for (UIView *v in [self.pane.subviews copy]) [v removeFromSuperview];
-    self.stLoop = self.stAutoplay = nil;
+    self.stAutoplay = nil;
     self.stOwn = self.stFv = self.stDo = self.stGate = self.stCb = self.stNet = self.stStore = self.stStubs = nil;
-    self.valA = self.valB = self.valNet = nil;
+    self.valNet = nil;
     self.netStat = self.storeStat = self.judgeStatus = nil;
     self.chips = nil;
     self.logBtns = nil;
     self.judgeVals = [NSMutableArray array];
-    for (UIButton *b in self.tabs) b.selected = (b.tag == self.curTab);
+    // 竖导航选中态（0..4 = 判定/解锁/网络/存储/诊断；循环已并入常驻 chips 行）
+    for (UIButton *b in self.navBtns) {
+        b.selected = (b.tag == self.curTab);
+        b.backgroundColor = b.selected
+            ? [UIColor colorWithRed:126/255.0 green:100/255.0 blue:172/255.0 alpha:0.40]
+            : [UIColor clearColor];
+    }
     self.paneAct.hidden = YES;
     self.paneAct.tag = -1;
 
     CGFloat y = xrc_theme_px(2);
     NSInteger t = self.curTab;
 
-    if (t == 0) {   // 循环
-        self.paneHint.text = @"设 A/B ＝ 把当前位置记入区间；循环开 ＝ 播到 B 自动回 A；A/B 菱形可直接拖动";
-        uint32_t from = 0, to = 0;
-        xrc_loop_get_range(&from, &to);
-        __weak typeof(self) ws = self;
-        self.valA = [self actionRowIn:self.pane y:y title:@"设起点 A" value:[self mmss:from] block:^{ [ws setFrom]; } note:kNoteLoop];
-        y += xrc_theme_px(38);
-        self.valB = [self actionRowIn:self.pane y:y title:@"设终点 B" value:[self mmss:to] block:^{ [ws setTo]; } note:kNoteLoop];
-        y += xrc_theme_px(38);
-        self.stLoop = [self toggleRowIn:self.pane y:y title:@"循环" on:xrc_loop_get_enabled()
-                                  block:^{ [ws toggleRepeat]; } note:kNoteLoop];
-        y += xrc_theme_px(38);
-        [self dangerRowIn:self.pane y:y title:@"重置区间" block:^{ [ws resetLoop]; } note:@"清空 A/B 区间与循环开关。"];
-        y += xrc_theme_px(38);
-        y += [self hintLineIn:self.pane y:y text:kNoteLoop];
-    } else if (t == 1) {   // 判定
+    if (t == 0) {   // 判定
         self.paneHint.text = @"四档 ±ms 阈值（需递增），应用后只改本地判定宽容度";
         self.paneAct.hidden = !xrc_cap_stub();
         self.paneAct.tag = 1;
@@ -680,7 +721,7 @@ static NSString *const kNoteSpeed =
         self.judgeStatus = [self statLineIn:self.pane y:y text:@""];
         y += xrc_theme_px(20);
         y += [self hintLineIn:self.pane y:y text:kNoteJudge];
-    } else if (t == 2) {   // 解锁
+    } else if (t == 1) {   // 解锁
         self.paneHint.text = @"离线/未授予时才有意义";
         __weak typeof(self) ws = self;
         NSArray *titles = @[@"拥有链", @"FV 锁", @"DO 锁", @"链门（总闸）", @"cb 自由化"];
@@ -707,7 +748,7 @@ static NSString *const kNoteSpeed =
             y += xrc_theme_px(38);
         }
         y += [self hintLineIn:self.pane y:y text:kNoteUnlock];
-    } else if (t == 3) {   // 网络
+    } else if (t == 2) {   // 网络
 #if XRC_DEV_SECTION
         self.paneHint.text = @"开发构建：私服重定向（显式开启才生效；只改 API 域名，不动 TLS）";
         __weak typeof(self) ws = self;
@@ -726,7 +767,7 @@ static NSString *const kNoteSpeed =
         [self statLineIn:self.pane y:y text:@"未授权构建，不提供联网功能"];
         y += xrc_theme_px(24);
 #endif
-    } else if (t == 4) {   // 存储
+    } else if (t == 3) {   // 存储
         self.paneHint.text = @"免越狱自用通道";
         __weak typeof(self) ws = self;
         self.stStore = [self toggleRowIn:self.pane y:y title:@"cb 外置" on:YES
@@ -1222,7 +1263,7 @@ static NSString *const kNoteSpeed =
     // 开关状态镜像（引擎真值 → 状态词）
     [self setState:self.stSpeedAudio on:xrc_audio_speed_enabled()];
     [self setState:self.stReplay on:xrc_replay_enabled()];
-    [self setState:self.stLoop on:xrc_loop_get_enabled()];
+    [self setState:self.chipLoop on:xrc_loop_get_enabled()];
     [self setState:self.stAutoplay on:xrc_judge_autoplay()];
     [self setState:self.stOwn on:xrc_brk_unlock_own()];
     [self setState:self.stFv on:xrc_brk_unlock_fv()];
@@ -1235,12 +1276,6 @@ static NSString *const kNoteSpeed =
         [self setState:self.stStore on:c.external_cb];
     }
 
-    if (self.valA || self.valB) {
-        uint32_t f = 0, t2 = 0;
-        xrc_loop_get_range(&f, &t2);
-        if (self.valA) self.valA.text = [self mmss:f];
-        if (self.valB) self.valB.text = [self mmss:t2];
-    }
     if (self.valNet) {
         xrc_config_t c; xrc_config_load(&c);
         self.valNet.text = c.net_base.length ? c.net_base : @"（未设置）";
@@ -1305,10 +1340,16 @@ static NSString *const kNoteSpeed =
 #endif
 }
 
-- (void)setState:(UILabel *)l on:(BOOL)on {
-    if (!l) return;
-    l.text = on ? @"已开" : @"已关";
-    l.textColor = on ? XRC_TXT : XRC_OFF;
+// 状态镜像（两种控件通用）：状态行标签＝"已开/已关"文本＋颜色；chips 按钮＝标题颜色
+- (void)setState:(UIView *)v on:(BOOL)on {
+    if (!v) return;
+    if ([v isKindOfClass:[UILabel class]]) {
+        UILabel *l = (UILabel *)v;
+        l.text = on ? @"已开" : @"已关";
+        l.textColor = on ? XRC_TXT : XRC_OFF;
+    } else if ([v isKindOfClass:[UIButton class]]) {
+        [(UIButton *)v setTitleColor:(on ? XRC_TXT : XRC_OFF) forState:UIControlStateNormal];
+    }
 }
 
 - (void)refresh {

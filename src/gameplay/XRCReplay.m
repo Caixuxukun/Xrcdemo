@@ -1057,6 +1057,30 @@ static uint64_t s_sv_lg[256];          /* 对应的逻辑音符（清绘制门�
 static int      s_sv_n;                /* 有效条目 */
 static int      s_sv_ring;             /* 溢出时的环形覆盖位 */
 
+// 弧的「天键」子笔记（LogicArcNote+0x120..+0x128 子表）：漏扫经父弧逐个补判
+// （"未消费 且 cur > 天键+0x1C+100 → LOST + 特效"，见 playback 笔记 §4），子笔记
+// 不随窗口遍历独立出现，路过跳过覆盖不到 ⇒ 在这里按**每个子笔记自己的时刻**补处置：
+//   已越过（cur−te>100）→ +0x0C/+0x0D 置 1（与音符级路过跳过同语义：消费＋不画）；
+//   is_show（父弧回头重显）且未越过 → 清 +0x0D（+0x0C 不动：消费态保持）。
+static void rpf_arc_children_sweep(uint64_t lg, int32_t cur, int is_show) {
+    uint64_t cb = 0, ce = 0;
+    if (!rd(lg + 0x120, &cb, 8) || !rd(lg + 0x128, &ce, 8)) return;
+    if (!s_ishp(cb) || !s_ishp(ce) || ce < cb || (ce - cb) > 0x400) return;
+    for (uint64_t p = cb; p < ce; p += 8) {
+        uint64_t ch = 0, v = 0;
+        if (!rd(p, &ch, 8) || !s_ishp(ch)) continue;
+        if (!rd(ch + XRC_NOTE_TIME_END_OFF, &v, 8)) continue;
+        int32_t te = (int32_t)(uint32_t)v;
+        uint8_t b0 = 0, b1 = 0;
+        if ((int64_t)cur - (int64_t)te > 100) {
+            if (rd(ch + 0x0C, &b0, 1) && !(b0 & 1)) wr8(ch + 0x0C, (uint8_t)(b0 | 1));
+            if (rd(ch + 0x0D, &b1, 1) && !(b1 & 1)) wr8(ch + 0x0D, (uint8_t)(b1 | 1));
+        } else if (is_show) {
+            if (rd(ch + 0x0D, &b1, 1) && (b1 & 1)) wr8(ch + 0x0D, (uint8_t)(b1 & ~1));
+        }
+    }
+}
+
 void xrc_replay_arc_visual_sweep(uint32_t cur_ms) {
     uint64_t scene = xrc_gameplay_instance();
     if (!s_ishp(scene)) return;
@@ -1080,6 +1104,7 @@ void xrc_replay_arc_visual_sweep(uint32_t cur_ms) {
         if (!rd(lg + XRC_NOTE_TIME_END_OFF, &te64, 8)) continue;
         int32_t te = (int32_t)(uint32_t)te64;
         if (te == 0) continue;
+        int is_show = 0;
         if ((int64_t)cur_ms - (int64_t)te > 100) {
             /* ── 越过：隐藏（对象软杠杆 + 绘制门硬杠杆）＋快照清零＋登记 ── */
             uint64_t f336 = 0;
@@ -1110,9 +1135,12 @@ void xrc_replay_arc_visual_sweep(uint32_t cur_ms) {
                 s_sv_lg[k] = s_sv_lg[s_sv_n - 1];
                 s_sv_n--;
                 nshow++;
+                is_show = 1;
                 break;
             }
         }
+        /* 天键子笔记：与弧级处置配套（越过置门/重显清门，按每个子笔记自己的时刻） */
+        rpf_arc_children_sweep(lg, (int32_t)cur_ms, is_show);
     }
     if (nhid > 0 || nshow > 0)
         xrc_logd(XRCLC_JUDGE, @"[rpf] ▧ 跳钟视觉清扫：隐藏 %d 重显 %d（cur=%u）", nhid, nshow, cur_ms);

@@ -335,11 +335,13 @@ static void s_scrub_tick(void *self) {
 //     必须成对（谱面静止期间两者任何一方脱钩都会破坏音画一致）。
 typedef int  (*s_pj_f5_t)(uint64_t note);
 typedef void (*s_pj_f7_t)(uint64_t note, uint64_t v);
+typedef int64_t (*s_pj_segmark_t)(uint64_t note, int32_t cur);   // 段表标记（返回值丢弃）
 
 static _Atomic(uint64_t) s_pj_ng    = 0;    // 已被施写 312 的 note 组
 static uint8_t           s_pj_saved = 0;    // 首见时的 312 原值
 static int               s_pj_marked;       // 诊断：累计"路过跳过"标记数
 static int               s_pj_te0;          // 诊断：窗口内次时间(+0x1C)==0 而被跳过的条目数
+static int               s_pj_ln_marked;    // 诊断：长条/弧段表预标记的段计数和（不预标记＝恢复时会爆的事件数）
 
 static bool s_pj_isptr(uint64_t v) { return v >= 0x100000000ULL && v < 0x7000000000ULL; }
 static bool s_pj_ishp(uint64_t v)  { return s_pj_isptr(v) && (v & 7) == 0; }
@@ -368,17 +370,39 @@ static void s_pause_pass_skip_tick(uint64_t ng, int32_t cur) {
     memcpy(&b, (void *)(ng + 0xA0), 8);   // 活动窗口（与 XRCReplay 的 RPF_VEC_BEGIN 同源）
     memcpy(&e, (void *)(ng + 0xA8), 8);
     if (!s_pj_ishp(b) || !s_pj_ishp(e) || e < b || (e - b) > 0x100000) return;
+    uint64_t mb = g_xrc.image_base;
     for (uint64_t p = b; p < e; p += 8) {
         uint64_t note = 0;
         memcpy(&note, (void *)p, 8);
         if (!s_pj_ishp(note)) continue;
+        uint64_t vt = 0;
+        memcpy(&vt, (void *)note, 8);
+        if (!s_pj_ishp(vt)) continue;
+        /* ── 长条/弧的「段表」预标记（与是否越过终点无关：只要已开始） ──
+           漏扫对长条/弧的"已处理"判据**不是** +0x0C/+0x0D，而是逐段的段表 flag
+
+           （`{time,count,flag}` 12B/段，"只置不消、遇已标记即停"，返回值＝新标记段的
+           计数和＝调用方随后要补发的「事件＋效果器特效」次数；见
+           research/notes/ios-7.0.255-02-playback.md §4 与 _c70_10091E878/E958.c）。
+           拖动/跳钟越过时这些段从未被走完 ⇒ 恢复瞬间按整条弧/长条的段数 n 补发
+           LOST/PURE 事件＋特效 —— 即"继续播放那一瞬把积压的判定全爆出来"。
+           修法：预调引擎自己的两个标记函数（E878=保持路径 / E958=未保持路径），
+           返回值丢弃 ⇒ 只落段表、不发事件；恢复时引擎再算得 n=0 ⇒ 静默。
+           跨骑在 cur 上、正在判定的弧（"seek 时弧正在判定"的复现）同样在这里被
+           把 cur 之前的部分标记掉——积压就断在源头。 */
+        if (mb && (vt == mb + XRC_LN_VPTR_ARC || vt == mb + XRC_LN_VPTR_HOLD)) {
+            int32_t t0 = 0;
+            memcpy(&t0, (void *)(note + 0x18), 4);
+            if (t0 != 0 && (int64_t)t0 <= (int64_t)cur) {
+                int64_t n1 = ((s_pj_segmark_t)(mb + (0x10091E958ULL - 0x100000000ULL)))(note, cur);
+                int64_t n2 = ((s_pj_segmark_t)(mb + (0x10091E878ULL - 0x100000000ULL)))(note, cur);
+                if (n1 + n2 > 0) s_pj_ln_marked += (int)(n1 + n2);   // 诊断：不预标记时＝恢复瞬间会爆的事件数
+            }
+        }
         int32_t te = 0;
         memcpy(&te, (void *)(note + 0x1C), 4);
         if (te == 0) { s_pj_te0++; continue; }                        // 次时间为 0：按规则跳过（留痕）
         if ((int64_t)cur - (int64_t)te <= 100) continue;              // 未越过终点
-        uint64_t vt = 0;
-        memcpy(&vt, (void *)note, 8);
-        if (!s_pj_ishp(vt)) continue;
         uint64_t f5 = 0, f7 = 0;
         memcpy(&f5, (void *)(vt + 40), 8);
         memcpy(&f7, (void *)(vt + 56), 8);
@@ -443,8 +467,8 @@ static void s_pause_tick(void *ngp) {
             }
             uint8_t g = *(uint8_t *)((char *)ng + XRC_NG_JUDGE_GATE_OFF);
             if (g & 1) *(uint8_t *)((char *)ng + XRC_NG_JUDGE_GATE_OFF) = s_pj_saved;
-            xrc_logd(XRCLC_JUDGE, @"暂停护栏解除：判定总闸还原（路过跳过累计 %d，te0 跳过 %d）",
-                     s_pj_marked, s_pj_te0);
+            xrc_logd(XRCLC_JUDGE, @"暂停护栏解除：判定总闸还原（路过跳过 %d，te0 %d，LN 段表预标记 %d）",
+                     s_pj_marked, s_pj_te0, s_pj_ln_marked);
         }
     }
 }
