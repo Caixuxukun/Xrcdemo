@@ -257,20 +257,22 @@
 // 场景：本机没有 meta.cb（用户手填内容包）→ cb 版本串恒为空（0x30/0x48 两串无值）+
 // 校验器在版本比较失败时把有效性字节置 0 —— 版本/更新层还有两处会把用户挡在门外：
 //   ①「内容更新强制门」sub_1001963D8（OnlineManager::tryHandleContentBundleOldError，长 0x268）：
-//      本机场景：本地版本串空 → 无论私服还是官服，内容包版本门（code 11）必判「过旧」→
-//      弹「A new content update is required. Returning to title screen.」+
-//      换场回标题（tag 162411）⇒ 拒绝进入。调用者 = 68 个 HTTP 端点响应处理器
+//      服务端错误码 code 11（内容包过旧）→ 弹「A new content update is required. Returning to
+//      title screen.」+ 换场回标题（tag 162411）⇒ 拒绝进入。调用者 = 68 个 HTTP 端点响应处理器
 //      （0x1007FA490-0x100819C78 全家族；样本 sub_1007FFD84 行 31-33、sub_1008003C8：
 //      code==11 → 调本门，返 0 则照常把错误码交给请求完成路径）。
-//      开关开 → x0=0 直返 = 其自身「已在标题/转场场景、无事可做」的既有早退语义（不弹窗不换场，
-//      调用方照常走完成路径）。入口序言 SUB SP,SP,#0xF0（SP 相对、重放安全）。
-//   ②「内容包更新指令处理器」sub_100815498（0x1B0 帧；+0xA0 处引 "orderedResults"）：
-//      处理 /game/content_bundle 响应里的服务端更新指令（orderedResults = 分片化更新清单）。
-//      出处 research/notes/xrc-plugin-site-semantics-2026-09-19.md §3.1：入口直返 =
-//      「忽略服务器的内容包更新指令，设备内容即真值」（与 cb_* 互补：一个管本地校验、一个管远端更新；
-//      离线场景不可达——无响应；开发构建私服 XRC_STRIP_CONTENT_BUNDLE=False 时必达）。
-//      入口序言 SUB SP,SP,#0x1B0（SP 相对、重放安全）。函数身份证据=[高]（字符串引用+前作笔记），
-//      内部动作未逐行核实=[中]，故桩只做"入口直返"不做任何内部手术。
+//      开关开 → **只记不跳**（2026-10-12 晚改）：直返依赖调用方对 0 的合同解释
+//      （"已在标题、无事可做"），其触发面未实测；同批 cb_fetch 直返已被证伪会打断启动链（见②）
+//      ⇒ 宁缺毋假，重放原逻辑。入口序言 SUB SP,SP,#0xF0（SP 相对、重放安全）。
+//   ②「内容包响应处理」sub_100815498（0x1B0 帧；+0xA0 处引 "orderedResults"）：
+//      处理 /game/content_bundle 响应（orderedResults = 分片化更新清单）。
+//      出处 research/notes/xrc-plugin-site-semantics-2026-09-19.md §3.1（原设计＝入口直返
+//      「忽略服务器的内容包更新指令，设备内容即真值」）。
+//      ⚠ 2026-10-12 晚实测证伪：入口直返会把 content_bundle 失败路径的收尾一并跳掉——
+//      发布构建（联网阻断 → 该请求必 -1022）下 cb 自由化 on 的启动全部永挂"进菜单之前"
+//      （停在 -1022 之后：无 compose/aggregate、无 unlock/me；cb 关则 1s 内续走；对照 c0fa5c6
+//      五点集合同机同内容全程正常）⇒ 改为**只记不跳**，重放原逻辑（等价未注入）。
+//      入口序言 SUB SP,SP,#0x1B0（SP 相对、重放安全）。函数身份证据=[高]（字符串引用+前作笔记）。
 #define XRC_BRK_CB_GATE_SITE_OFF     (0x1963D8ULL)   // 内容更新强制门入口（SUB SP,SP,#0xF0）
 #define XRC_BRK_CB_GATE_REPLAY_OFF   (0x1468128ULL)
 #define XRC_BRK_CB_FETCH_SITE_OFF    (0x815498ULL)   // 内容包更新指令处理器入口（SUB SP,SP,#0x1B0）

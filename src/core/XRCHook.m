@@ -266,15 +266,14 @@ static void s_cb_wipe_guard(void *vctx) {
 
 // ④ 内容更新强制门（sub_1001963D8 = OnlineManager::tryHandleContentBundleOldError）：
 //    服务端错误码 code 11（内容包过旧）时弹「A new content update is required. Returning to
-//    title screen.」并换场回标题（tag 162411）—— 68 个 HTTP 端点响应处理器共用此门
-//    （0x1007FA490-0x100819C78；返 0 = "无事可做"，调用方照常走完成路径）。
-//    无 meta.cb 时本地版本串为空（User-Agent/ContentBundle 头都是空 bundle），
-//    服务端的内容包版本门（XRC_STRIP_CONTENT_BUNDLE=False 保留）会把交互判为过旧 ⇒ 被踢回标题。
-//    开 = x0=0 直返（**镜像其自身"已在标题/转场场景"的合法早退语义**：不弹窗、不换场，
-//    调用方照常走完成路径）；关 = 重放原序言，行为与未注入完全一致。
-static void s_cb_gate_skip(void *vctx) {
+//    title screen.」并换场回标题（tag 162411）—— 68 个 HTTP 端点响应处理器共用此门。
+//    ⚠ 2026-10-12 晚起改为**只记不跳**：x0=0 直返依赖调用方对返回值的合同解释
+//    （"已在标题、无事可做"），其真实触发面本轮无法实测；同批 cb_fetch 的直返已被实测证伪
+//    会打断启动链（见 ⑤b 实测记录）⇒ 本门一并退化为观测点，重放原逻辑（等价于未注入）。
+static void s_cb_gate_observe(void *vctx) {
     if (!atomic_load(&s_cb_bypass)) return;
-    s_ret(0, vctx);
+    xrc_logi(XRCLC_BRK, @"cb_gate hit (cb_bypass=on) → replay（只记不跳）");
+    (void)vctx;
 }
 
 // ⑤ 内容包更新指令处理器（sub_100815498，+0xA0 处引响应字段 orderedResults）：开 = 整体跳过
@@ -293,21 +292,20 @@ static void s_cb_skip_void(void *vctx) {
         (void *)__darwin_arm_thread_state64_get_lr(*ss));
 }
 
-// XRCNet 导出（cb_fetch 的私服优先判定；两模式均存在）
+// XRCNet 导出（观测日志用；两模式均存在）
 extern bool xrc_net_enabled(void);
 
-// ⑤b cb_fetch 专用（与 cb_dispatch 分离）：**网络指令族让位于私服**——
-//     私服开启时服务器说了算（不忽略其"内容更新"指令，重放原逻辑）；
-//     私服关闭 / 发布构建（无网可谈）时才跳过本函数（设备本地内容即真值）。
-//     同一个时刻只有一个在网络行为上说话（面板私服开关即唯一相关开关）。
-static void s_cb_fetch_skip(void *vctx) {
+// ⑤b 内容包响应处理（sub_100815498，引 "orderedResults"）：**只记不跳**。
+//     2026-10-12 晚实测证伪原"入口直返"设计：发布构建（联网阻断 → content_bundle 请求必 -1022）
+//     下 cb 自由化 on 的启动全部永挂"进菜单之前"（停在 -1022 之后，无 compose/aggregate、
+//     无 unlock/me；cb 关则同点 1s 内续走；对照 c0fa5c6 五点集同机同内容全程正常）——
+//     直返把失败路径的收尾一并跳掉，启动链永等"内容包检查完成"。该函数内部动作未逐行核实，
+//     跳过与代执行都无法保证调用方合同 ⇒ 桩退化为观测点：重放原逻辑（等价于未注入）＋ info 留痕。
+static void s_cb_fetch_observe(void *vctx) {
     if (!atomic_load(&s_cb_bypass)) return;
-    if (xrc_net_enabled()) return;                 /* 私服优先：交给服务器 */
-    ucontext_t *uc = (ucontext_t *)vctx;
-    if (!uc || !uc->uc_mcontext) return;
-    __typeof__(uc->uc_mcontext->__ss) *ss = &uc->uc_mcontext->__ss;
-    __darwin_arm_thread_state64_set_pc_fptr(*ss,
-        (void *)__darwin_arm_thread_state64_get_lr(*ss));
+    xrc_logi(XRCLC_BRK, @"cb_fetch hit (cb_bypass=on net=%d) → replay（只记不跳，防启动链中断）",
+             (int)xrc_net_enabled());
+    (void)vctx;
 }
 
 // ---------------- 曲目锁态覆盖 ----------------
@@ -828,8 +826,8 @@ static const xrc_brk_entry_t k_brk_entries[] = {
     { "cb_wipe",     XRC_BRK_CB_WIPE_SITE_OFF,     XRC_BRK_CB_WIPE_REPLAY_OFF,   s_cb_wipe_guard },
     { "cb_dispatch", XRC_BRK_CB_DISPATCH_SITE_OFF, XRC_BRK_CB_DISPATCH_REPLAY_OFF, s_cb_skip_void },
     // cb 自由化 · 版本/更新链（无 meta.cb 情形；语义与证据链见 XRCProfile.h 同名块）
-    { "cb_gate",     XRC_BRK_CB_GATE_SITE_OFF,     XRC_BRK_CB_GATE_REPLAY_OFF,   s_cb_gate_skip },
-    { "cb_fetch",    XRC_BRK_CB_FETCH_SITE_OFF,    XRC_BRK_CB_FETCH_REPLAY_OFF,  s_cb_fetch_skip },
+    { "cb_gate",     XRC_BRK_CB_GATE_SITE_OFF,     XRC_BRK_CB_GATE_REPLAY_OFF,   s_cb_gate_observe },
+    { "cb_fetch",    XRC_BRK_CB_FETCH_SITE_OFF,    XRC_BRK_CB_FETCH_REPLAY_OFF,  s_cb_fetch_observe },
     // ---- 自动演奏（外部参考实现对齐；功能账 §5.2）----
     { "ap_ln_state",      XRC_BRK_AP_LN_STATE_SITE_OFF,     XRC_BRK_AP_LN_STATE_REPLAY_OFF,     s_ap_ln_state },
     { "ap_ln_tick",       XRC_BRK_AP_LN_TICK_SITE_OFF,      XRC_BRK_AP_LN_TICK_REPLAY_OFF,      s_ap_ln_tick },
