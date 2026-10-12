@@ -206,20 +206,11 @@ static NSString *const kNoteSpeed =
         [self.hdr addSubview:v];
 
         UIButton *help = [UIButton buttonWithType:UIButtonTypeCustom];
-        help.frame = CGRectMake(self.hdr.bounds.size.width - xrc_theme_px(104), xrc_theme_px(1), xrc_theme_px(30), xrc_theme_px(30));
+        help.frame = CGRectMake(self.hdr.bounds.size.width - xrc_theme_px(70), xrc_theme_px(1), xrc_theme_px(30), xrc_theme_px(30));
         help.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
         [help setImage:xrc_theme_img(@"layouts/mainmenu/help_button.png") forState:UIControlStateNormal];
         [help addTarget:self action:@selector(toggleInfo) forControlEvents:UIControlEventTouchUpInside];
         [self.hdr addSubview:help];
-
-        self.btnExpand = [UIButton buttonWithType:UIButtonTypeCustom];
-        self.btnExpand.frame = CGRectMake(self.hdr.bounds.size.width - xrc_theme_px(70), xrc_theme_px(0), xrc_theme_px(32), xrc_theme_px(30));
-        self.btnExpand.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
-        [self.btnExpand setTitle:@"⌃" forState:UIControlStateNormal];
-        self.btnExpand.titleLabel.font = xrc_theme_font(@"L2-Semibold", 17);
-        [self.btnExpand setTitleColor:XRC_DIM forState:UIControlStateNormal];
-        [self.btnExpand addTarget:self action:@selector(toggleExpand) forControlEvents:UIControlEventTouchUpInside];
-        [self.hdr addSubview:self.btnExpand];
 
         UIButton *x = [UIButton buttonWithType:UIButtonTypeCustom];
         x.frame = CGRectMake(self.hdr.bounds.size.width - xrc_theme_px(36), xrc_theme_px(3), xrc_theme_px(28), xrc_theme_px(28));
@@ -279,9 +270,7 @@ static NSString *const kNoteSpeed =
         uint32_t start = xrc_player_position_ms();
         if (start > ms + 300)                     // 深回退：重播事务接管（重置/复活/重建）
             xrc_gameplay_request(XRC_OP_SEEK_REPLAY, ms);
-        // 浅回退/前进：不跑重播事务——事务尾的指示器全量清零会把**正在播放中的弧头光柱**
-        // 也清掉（只在头段换段时自愈），且被越过的残留已由「路过跳过＋绘制门＋视觉清扫」
-        // 就地处理（含长条/弧段表预标记），无需事务。
+        // 浅回退/前进：位置已由 onScrubLive 落位，驻停待「继续/关闭」。
     };
     self.timeline.onLoopRangeChanged = ^(double from, double to, BOOL finished) {
         __strong typeof(self) sf = weakTL; if (!sf) return;
@@ -309,15 +298,18 @@ static NSString *const kNoteSpeed =
     self.chipsRow = [[UIView alloc] initWithFrame:CGRectMake(x0, y, cw, xrc_theme_px(32))];
     [self.glass addSubview:self.chipsRow];
     {
-        CGFloat chipW = xrc_theme_px(88), gap = xrc_theme_px(8);
+        CGFloat chipW = xrc_theme_px(80), gap = xrc_theme_px(8);
         self.chipA     = [self chipButtonIn:self.chipsRow x:0                     width:chipW title:@"设 A" action:@selector(setFrom)      note:kNoteLoop];
         self.chipB     = [self chipButtonIn:self.chipsRow x:chipW + gap           width:chipW title:@"设 B" action:@selector(setTo)        note:kNoteLoop];
         self.chipLoop  = [self chipButtonIn:self.chipsRow x:(chipW + gap) * 2     width:chipW title:@"循环" action:@selector(toggleRepeat) note:kNoteLoop];
         self.chipReset = [self chipButtonIn:self.chipsRow x:(chipW + gap) * 3     width:chipW title:@"重置" action:@selector(resetLoop)    note:kNoteLoop];
-        CGFloat sw = xrc_theme_px(104);
-        CGFloat sx = cw - (sw + gap) * 2;
-        self.stSpeedAudio = [self chipButtonIn:self.chipsRow x:sx               width:sw title:@"音乐变速" action:@selector(toggleSpeedAudio) note:kNoteSpeed];
-        self.stReplay     = [self chipButtonIn:self.chipsRow x:sx + sw + gap    width:sw title:@"回跳重播" action:@selector(toggleReplay)
+        // 展开/收起键：常驻 chips 行最右、高亮色——先前在标头右上角的 ⌃ 太不显眼
+        CGFloat ew = xrc_theme_px(92), sw = xrc_theme_px(96);
+        CGFloat sx = cw - ew - gap - (sw + gap) * 2;
+        self.btnExpand = [self chipButtonIn:self.chipsRow x:sx                width:ew title:@"展开 ⌃" action:@selector(toggleExpand) note:nil];
+        [self.btnExpand setTitleColor:XRC_LAV forState:UIControlStateNormal];
+        self.stSpeedAudio = [self chipButtonIn:self.chipsRow x:sx + ew + gap  width:sw title:@"音乐变速" action:@selector(toggleSpeedAudio) note:kNoteSpeed];
+        self.stReplay     = [self chipButtonIn:self.chipsRow x:sx + ew + gap + sw + gap width:sw title:@"回跳重播" action:@selector(toggleReplay)
                                          note:@"回跳到已游玩并判定过的谱面段落时，支持重新游玩该段，同时清空分数记录。"];
     }
     y += xrc_theme_px(32);
@@ -428,7 +420,7 @@ static NSString *const kNoteSpeed =
     gf.size = CGSizeMake(W - 20, glassH);
     self.glass.frame = gf;
     self.dim.alpha = self.expanded ? 1.0 : 0.0;             // 折叠不压暗（打开面板不停歌）
-    [self.btnExpand setTitle:(self.expanded ? @"⌄" : @"⌃") forState:UIControlStateNormal];
+    [self.btnExpand setTitle:(self.expanded ? @"收起 ⌄" : @"展开 ⌃") forState:UIControlStateNormal];
 
     // 底栏（两种形态都在 glass 底部：折叠=条底最后一行；展开=屏底）
     CGFloat fy = glassH - padB - xrc_theme_px(44);
