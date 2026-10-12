@@ -293,6 +293,9 @@ static void s_cb_skip_void(void *vctx) {
         (void *)__darwin_arm_thread_state64_get_lr(*ss));
 }
 
+// XRCNet 导出（cb_fetch 的私服优先判定；两模式均存在）
+extern bool xrc_net_enabled(void);
+
 // ⑤b cb_fetch 专用（与 cb_dispatch 分离）：**网络指令族让位于私服**——
 //     私服开启时服务器说了算（不忽略其"内容更新"指令，重放原逻辑）；
 //     私服关闭 / 发布构建（无网可谈）时才跳过本函数（设备本地内容即真值）。
@@ -306,9 +309,6 @@ static void s_cb_fetch_skip(void *vctx) {
     __darwin_arm_thread_state64_set_pc_fptr(*ss,
         (void *)__darwin_arm_thread_state64_get_lr(*ss));
 }
-
-// XRCNet 导出（cb_fetch 的私服优先判定；两模式均存在）
-extern bool xrc_net_enabled(void);
 
 // ---------------- 曲目锁态覆盖 ----------------
 // 锁状态函数 `sub_100919E5C` 内的两个专属子分支（各自唯一调用方 = 锁态函数自身）：
