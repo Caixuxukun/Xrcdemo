@@ -56,6 +56,9 @@ static void s_ensure_defaults(NSMutableDictionary *p) {
     if (!p[@"unlockFv"])   p[@"unlockFv"]   = @NO;
     if (!p[@"unlockDo"])   p[@"unlockDo"]   = @NO;
     if (!p[@"gateOpen"])   p[@"gateOpen"]   = @NO;
+    // 全条件放行 / 本地内容放行：默认关（源逻辑与 2026-09-28 教训见 XRCProfile.h 同名块）
+    if (!p[@"unlockAll"])  p[@"unlockAll"]  = @NO;
+    if (!p[@"dlReady"])    p[@"dlReady"]    = @NO;
     // cb 验证链开关：默认开（离线自用前提）——注意与 xrc_config_load 的缺省保持一致。
     if (!p[@"cbBypass"])   p[@"cbBypass"]   = @YES;
     // 存储外置：默认开（cb 搬到 Documents，免越狱下外部可管理的唯一通道）
@@ -135,6 +138,8 @@ void xrc_config_load(xrc_config_t *out) {
     out->unlock_fv      = [prefs[@"unlockFv"] boolValue];
     out->unlock_do      = [prefs[@"unlockDo"] boolValue];
     out->gate_open      = [prefs[@"gateOpen"] boolValue];
+    out->unlock_all     = [prefs[@"unlockAll"] boolValue];
+    out->dl_ready       = [prefs[@"dlReady"] boolValue];
     // 以下各项缺省由 s_ensure_defaults 单点提供（dict 里必有键）——load 直读，无需重复兜底
     out->cb_bypass      = [prefs[@"cbBypass"] boolValue];
     out->external_cb    = [prefs[@"externalCb"] boolValue];
@@ -163,6 +168,8 @@ void xrc_config_save(const xrc_config_t *c) {
     p[@"unlockFv"]      = @(c->unlock_fv);
     p[@"unlockDo"]      = @(c->unlock_do);
     p[@"gateOpen"]      = @(c->gate_open);
+    p[@"unlockAll"]     = @(c->unlock_all);
+    p[@"dlReady"]       = @(c->dl_ready);
     p[@"cbBypass"]      = @(c->cb_bypass);
     p[@"externalCb"]    = @(c->external_cb);
     p[@"autoplay"]      = @(c->autoplay);

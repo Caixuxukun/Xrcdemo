@@ -181,25 +181,34 @@ static void s_ret(uint64_t val, void *vctx) {
     atomic_fetch_add(&s_lock_hits, 1);
 }
 
-// 四个独立开关：
+// 六个独立开关：
 //   own  → unlock_l1/l2/l3（拥有链；覆盖"服务器未授予、本地已有内容"的离线场景）
 //   fv   → lock_fv（FV 五曲 fast path → 五难度全解）
 //   do   → lock_do（DO/konzetsu 分支 → 同上）
 //   gate → fv_gate（终章链门；**1 = 放行**，决定整表是否解锁）
+//   all  → lock_all/play_gate/cond_unlock_*（全条件放行：锁态/可玩性/条件判定源头恒真；
+//          另与 do 联动旁路锁绘族（含 arghena 专属曲绘）——见 s_jacket_branch）
+//   dl   → dl_play（下载"需动作"谓词恒 0：开局不转"Download song?"弹窗；文件存在性开局链亲验）
 // 另有 chain_prog（守崩桩）**不设开关、恒生效**，见下。
 static _Atomic(bool) s_unlock_own = false;
 static _Atomic(bool) s_unlock_fv  = false;
 static _Atomic(bool) s_unlock_do  = false;
 static _Atomic(bool) s_gate_open  = false;
+static _Atomic(bool) s_unlock_all = false;
+static _Atomic(bool) s_dl_ready   = false;
 
 void xrc_brk_set_unlock_own(bool on) { atomic_store(&s_unlock_own, on); }
 void xrc_brk_set_unlock_fv(bool on)  { atomic_store(&s_unlock_fv, on); }
 void xrc_brk_set_unlock_do(bool on)  { atomic_store(&s_unlock_do, on); }
 void xrc_brk_set_gate_open(bool on)  { atomic_store(&s_gate_open, on); }
+void xrc_brk_set_unlock_all(bool on) { atomic_store(&s_unlock_all, on); }
+void xrc_brk_set_dl_ready(bool on)   { atomic_store(&s_dl_ready, on); }
 bool xrc_brk_unlock_own(void) { return atomic_load(&s_unlock_own); }
 bool xrc_brk_unlock_fv(void)  { return atomic_load(&s_unlock_fv); }
 bool xrc_brk_unlock_do(void)  { return atomic_load(&s_unlock_do); }
 bool xrc_brk_gate_open(void)  { return atomic_load(&s_gate_open); }
+bool xrc_brk_unlock_all(void) { return atomic_load(&s_unlock_all); }
+bool xrc_brk_dl_ready(void)   { return atomic_load(&s_dl_ready); }
 
 static void s_unlock_force_true(void *vctx) {     // unlock_l1/l2/l3 共用
     if (!atomic_load(&s_unlock_own)) return;
@@ -223,7 +232,6 @@ static void s_cb_ready_true(void *vctx) {
         (void *)__darwin_arm_thread_state64_get_lr(*ss));
 }
 
-// void 函数整体跳过桩（错码分发）：x0 不动，直接按 LR 返回
 // ---- cb 自由化 ----
 // ① ② 共用：B.NE（逐文件 sha256 / 三清单 HMAC）——开=恒"相等"（不跳失败路径）；关=按 NZCV 复现原分支。
 // 不能走重放跳板：B.NE 是 PC 相对指令，在跳板处执行会算错目标地址。
@@ -249,12 +257,33 @@ static void s_cb_cond_skip(void *vctx) {
     __darwin_arm_thread_state64_set_pc_fptr(*ss, (void *)((!z && target) ? target : pc + 4));
 }
 
-// ③ 清树入口：开=直返（cb/meta* 不被清）；关=照常执行（重放跳板跑原序言）。
+// ③ 清树入口（删 cb/meta_old.cb / cb/meta.cb / cb/meta_new.cb + rm -r cb/active 整树 + 清内存态）：
+//    开=直返（meta 文件、内容树与内存态原样保留）；关=照常执行（重放跳板跑原序言）。
 static void s_cb_wipe_guard(void *vctx) {
     if (!atomic_load(&s_cb_bypass)) return;
     s_ret(0, vctx);
 }
 
+// ④ 内容更新强制门（sub_1001963D8 = OnlineManager::tryHandleContentBundleOldError）：
+//    服务端错误码 code 11（内容包过旧）时弹「A new content update is required. Returning to
+//    title screen.」并换场回标题（tag 162411）—— 68 个 HTTP 端点响应处理器共用此门
+//    （0x1007FA490-0x100819C78；返 0 = "无事可做"，调用方照常走完成路径）。
+//    无 meta.cb 时本地版本串为空（User-Agent/ContentBundle 头都是空 bundle），
+//    服务端的内容包版本门（XRC_STRIP_CONTENT_BUNDLE=False 保留）会把交互判为过旧 ⇒ 被踢回标题。
+//    开 = x0=0 直返（**镜像其自身"已在标题/转场场景"的合法早退语义**：不弹窗、不换场，
+//    调用方照常走完成路径）；关 = 重放原序言，行为与未注入完全一致。
+static void s_cb_gate_skip(void *vctx) {
+    if (!atomic_load(&s_cb_bypass)) return;
+    s_ret(0, vctx);
+}
+
+// ⑤ 内容包更新指令处理器（sub_100815498，+0xA0 处引响应字段 orderedResults）：开 = 整体跳过
+//    （忽略服务器的内容包更新指令，设备内容即真值）；关 = 重放原序言。
+//    与 cb_gate 互补：前者管"远端更新"，后者管"错误呈现"。
+//    ⚠ 函数身份证据=[高]（字符串引用+前作笔记），内部动作未逐行核实=[中] ⇒ 桩只做入口直返、
+//      不做内部手术；本函数为回调注册形态（全二进制无直接调用者，仅数据引用）。
+//    s_cb_skip_void 为 void 函数整体跳过桩（错码分发 cb_dispatch 与本站共用）：x0 不动、
+//    直接按 LR 返回（函数体不执行、栈帧未建立，直返安全）。
 static void s_cb_skip_void(void *vctx) {
     if (!atomic_load(&s_cb_bypass)) return;
     ucontext_t *uc = (ucontext_t *)vctx;
@@ -263,6 +292,23 @@ static void s_cb_skip_void(void *vctx) {
     __darwin_arm_thread_state64_set_pc_fptr(*ss,
         (void *)__darwin_arm_thread_state64_get_lr(*ss));
 }
+
+// ⑤b cb_fetch 专用（与 cb_dispatch 分离）：**网络指令族让位于私服**——
+//     私服开启时服务器说了算（不忽略其"内容更新"指令，重放原逻辑）；
+//     私服关闭 / 发布构建（无网可谈）时才跳过本函数（设备本地内容即真值）。
+//     同一个时刻只有一个在网络行为上说话（面板私服开关即唯一相关开关）。
+static void s_cb_fetch_skip(void *vctx) {
+    if (!atomic_load(&s_cb_bypass)) return;
+    if (xrc_net_enabled()) return;                 /* 私服优先：交给服务器 */
+    ucontext_t *uc = (ucontext_t *)vctx;
+    if (!uc || !uc->uc_mcontext) return;
+    __typeof__(uc->uc_mcontext->__ss) *ss = &uc->uc_mcontext->__ss;
+    __darwin_arm_thread_state64_set_pc_fptr(*ss,
+        (void *)__darwin_arm_thread_state64_get_lr(*ss));
+}
+
+// XRCNet 导出（cb_fetch 的私服优先判定；两模式均存在）
+extern bool xrc_net_enabled(void);
 
 // ---------------- 曲目锁态覆盖 ----------------
 // 锁状态函数 `sub_100919E5C` 内的两个专属子分支（各自唯一调用方 = 锁态函数自身）：
@@ -502,6 +548,72 @@ static void s_ap_arc_visual(void *vctx) {
         (void *)(mb + XRC_BRK_AP_ARC_VISUAL_SITE_OFF + 8));
 }
 
+// ---------------- 全条件放行（unlock_all / dl_ready；站点/出处见 XRCProfile.h 同名块）----------------
+// 目标（第一性原理）：**本地存在合法谱面（该难度在 songlist 声明，song+0x250[idx]!=0）时，
+// 任何"条件"不得阻止其可见、可游玩**。四处判定源头：
+//   ① sub_100919E5C 锁态总源（44 调用点：选曲 cell/曲绘/横幅/世界/包页）→ 直返五字节全解；
+//   ② sub_100919874 可玩性总源（70 调用点：start 钮/开局链）→ 直返 1（放行）。
+//      ⚠ 仅当该难度"已声明"才放行：没有谱面的难度不硬开（开局会 load 失败 __cxa_throw）。
+//   ③ sub_100BDC5A8 / sub_100BDC8D4 难度条件求值（解锁条件对象家族）→ 恒真（1）。
+//   ④ sub_100850308 下载"需动作"谓词（仅 2 调用点：start 钮图标/开局弹窗分流）→ 直返 0。
+//      ⚠ 不动 sub_100844774（下载机制本体，2026-09-28 教训）；缺文件仍由开局链温和失败+重扫。
+static void s_lock_all(void *vctx) {           // lock_fv/lock_do 同款直返；总源级覆盖
+    if (!atomic_load(&s_unlock_all)) return;
+    s_ret(0x0000000101010101ULL, vctx);
+}
+
+static void s_play_gate(void *vctx) {          // 可玩性总源：声明过难度 → 恒放行
+    if (!atomic_load(&s_unlock_all)) return;
+    ucontext_t *uc = (ucontext_t *)vctx;
+    if (!uc || !uc->uc_mcontext) return;
+    __typeof__(uc->uc_mcontext->__ss) *ss = &uc->uc_mcontext->__ss;
+    uint64_t song = ss->__x[0];
+    uint64_t diff = (uint32_t)ss->__x[1];
+    if (!s_ap_ptr_ok(song)) return;                    // 指针防御：异常形态空转回放原逻辑
+    uint64_t idx = diff >= 5 ? 1 : diff;               // = sub_100BDCD20（≥5 归 1；0x84CE2C 内同式）
+    if (s_ap_ld8(song + 0x250 + idx) == 0) return;     // 该难度未声明（无谱面）：不硬放行
+    s_ret(1, vctx);
+}
+
+static void s_cond_unlock(void *vctx) {        // BDC5A8/BDC8D4 共用：解锁条件恒满足
+    if (!atomic_load(&s_unlock_all)) return;
+    s_ret(1, vctx);
+}
+
+static void s_dl_play_ready(void *vctx) {      // "需要下载/更新"谓词 → 无需动作
+    if (!atomic_load(&s_dl_ready)) return;
+    s_ret(0, vctx);
+}
+
+// 锁绘分支族（四处，站点/出处见 XRCProfile.h 同名块）：
+//   触发器 = 锁态打包值 bit32（b4/INS）置位 → 走 sub_10084F0E8 锁绘选择器
+//   （包 konzetsu/finale → jacket_locked_*；arghena→konzetsu 绘；其余 → jacket_locked_generic）。
+//   ⚠ 该位与"五难度全解"共用（unlockDo/unlockAll 置 b4=1 ⇒ 原本该显示锁绘的曲目锁绘状态被
+//   固化成"所有曲都触发"）→ 开关开时恒走普通曲绘侧：TBNZ 站点→不跳；TBZ 站点（B3F274）→跳。
+//   开关关 → 按位复现原分支（逐字节同原行为）。均为 PC 相对条件分支：replay=0（no-replay）。
+static void s_jacket_branch(void *vctx, int reg, uint64_t target_off, bool tbz) {
+    ucontext_t *uc = (ucontext_t *)vctx;
+    if (!uc || !uc->uc_mcontext) return;
+    __typeof__(uc->uc_mcontext->__ss) *ss = &uc->uc_mcontext->__ss;
+    uint64_t pc = (uint64_t)__darwin_arm_thread_state64_get_pc(*ss);
+    if (atomic_load(&s_unlock_all) || atomic_load(&s_unlock_do)) {
+        // 普通曲绘侧：TBNZ（b4 置位本该跳）→ 不跳；TBZ（b4 清零本该跳）→ 跳。
+        uint64_t mb = atomic_load(&s_main_base);
+        uint64_t tgt = (tbz && mb) ? mb + target_off : 0;
+        __darwin_arm_thread_state64_set_pc_fptr(*ss, (void *)(tgt ? tgt : pc + 4));
+        return;
+    }
+    uint64_t mb = atomic_load(&s_main_base);
+    uint64_t tgt = mb ? mb + target_off : 0;
+    bool bit = (((uint64_t)ss->__x[reg] >> 32) & 1u) != 0;   // TBZ/TBNZ Xn,#0x20（bit32 = b4 的 LSB）
+    bool take = tbz ? !bit : bit;
+    __darwin_arm_thread_state64_set_pc_fptr(*ss, (void *)((take && tgt) ? tgt : pc + 4));
+}
+static void s_jacket_lock(void *vctx)  { s_jacket_branch(vctx, 0,  XRC_BRK_JACKET_LOCK_TARGET_OFF,  false); }  // 84EF48 TBNZ X0
+static void s_jacket_cell(void *vctx)  { s_jacket_branch(vctx, 8,  XRC_BRK_JACKET_CELL_TARGET_OFF,  false); }  // 8EAFB4 TBNZ X8
+static void s_jacket_info(void *vctx)  { s_jacket_branch(vctx, 0,  XRC_BRK_JACKET_INFO_TARGET_OFF,  false); }  // 94A57C TBNZ X0
+static void s_jacket_panel(void *vctx) { s_jacket_branch(vctx, 24, XRC_BRK_JACKET_PANEL_TARGET_OFF, true);  }  // B3F274 TBZ X24
+
 // 桩表（site/replay/handler 同源 XRCProfile.h；加桩 = 这里加一行 + inject.py 同步）。
 // 放在分发器之前：分发器用它做"未注册兜底"（早期命中时注册可能还没跑，见 xrc_brk_setup_early）。
 typedef struct {
@@ -715,6 +827,9 @@ static const xrc_brk_entry_t k_brk_entries[] = {
     { "cb_listhash", XRC_BRK_CB_LISTHASH_SITE_OFF, 0,                            s_cb_cond_skip },
     { "cb_wipe",     XRC_BRK_CB_WIPE_SITE_OFF,     XRC_BRK_CB_WIPE_REPLAY_OFF,   s_cb_wipe_guard },
     { "cb_dispatch", XRC_BRK_CB_DISPATCH_SITE_OFF, XRC_BRK_CB_DISPATCH_REPLAY_OFF, s_cb_skip_void },
+    // cb 自由化 · 版本/更新链（无 meta.cb 情形；语义与证据链见 XRCProfile.h 同名块）
+    { "cb_gate",     XRC_BRK_CB_GATE_SITE_OFF,     XRC_BRK_CB_GATE_REPLAY_OFF,   s_cb_gate_skip },
+    { "cb_fetch",    XRC_BRK_CB_FETCH_SITE_OFF,    XRC_BRK_CB_FETCH_REPLAY_OFF,  s_cb_fetch_skip },
     // ---- 自动演奏（外部参考实现对齐；功能账 §5.2）----
     { "ap_ln_state",      XRC_BRK_AP_LN_STATE_SITE_OFF,     XRC_BRK_AP_LN_STATE_REPLAY_OFF,     s_ap_ln_state },
     { "ap_ln_tick",       XRC_BRK_AP_LN_TICK_SITE_OFF,      XRC_BRK_AP_LN_TICK_REPLAY_OFF,      s_ap_ln_tick },
@@ -732,6 +847,16 @@ static const xrc_brk_entry_t k_brk_entries[] = {
     { "lock_do",          XRC_BRK_LOCK_DO_SITE_OFF,         XRC_BRK_LOCK_DO_REPLAY_OFF,         s_lock_do },
     { "fv_gate",          XRC_BRK_FV_GATE_SITE_OFF,         XRC_BRK_FV_GATE_REPLAY_OFF,         s_finale_gate_open },
     { "chain_prog",       XRC_BRK_CHAIN_PROG_SITE_OFF,      XRC_BRK_CHAIN_PROG_REPLAY_OFF,      s_chain_prog_neutral },
+    // ---- 全条件放行（unlock_all / dl_ready；站点/出处见 XRCProfile.h 同名块）----
+    { "lock_all",         XRC_BRK_LOCK_ALL_SITE_OFF,        XRC_BRK_LOCK_ALL_REPLAY_OFF,        s_lock_all },
+    { "play_gate",        XRC_BRK_PLAY_GATE_SITE_OFF,       XRC_BRK_PLAY_GATE_REPLAY_OFF,       s_play_gate },
+    { "dl_play",          XRC_BRK_DL_PLAY_SITE_OFF,         XRC_BRK_DL_PLAY_REPLAY_OFF,         s_dl_play_ready },
+    { "cond_unlock_a",    XRC_BRK_COND_UNLOCK_A_SITE_OFF,   XRC_BRK_COND_UNLOCK_A_REPLAY_OFF,   s_cond_unlock },
+    { "cond_unlock_b",    XRC_BRK_COND_UNLOCK_B_SITE_OFF,   XRC_BRK_COND_UNLOCK_B_REPLAY_OFF,   s_cond_unlock },
+    { "jacket_lock",      XRC_BRK_JACKET_LOCK_SITE_OFF,     0,                                  s_jacket_lock },
+    { "jacket_cell",      XRC_BRK_JACKET_CELL_SITE_OFF,     0,                                  s_jacket_cell },
+    { "jacket_info",      XRC_BRK_JACKET_INFO_SITE_OFF,     0,                                  s_jacket_info },
+    { "jacket_panel",     XRC_BRK_JACKET_PANEL_SITE_OFF,    0,                                  s_jacket_panel },
     // 弧/绘制观测桩（只观测不改行为；见本文件顶部"弧/绘制 观测桩"长注释）
     { "rpf_draw",         XRC_BRK_RPF_DRAW_SITE_OFF,        0,                                   s_rpf_draw },
     { "rpf_arctick",      XRC_BRK_RPF_ARCTICK_SITE_OFF,     0,                                   s_rpf_arctick },
@@ -900,7 +1025,11 @@ static const xrc_feature_sites_t k_feature_sites[] = {
     { "unlock_own",     { "unlock_l1", "unlock_l2", "unlock_l3" }, 3 },
     { "unlock_lock",    { "lock_fv", "lock_do", "fv_gate" }, 3 },
     { "chain_guard",    { "chain_prog" }, 1 },
-    { "cb_free",        { "cb_ready", "cb_filehash", "cb_listhash", "cb_wipe", "cb_dispatch" }, 5 },
+    { "unlock_all",     { "lock_all", "play_gate", "cond_unlock_a", "cond_unlock_b",
+                          "jacket_lock", "jacket_cell", "jacket_info", "jacket_panel" }, 8 },
+    { "dl_ready",       { "dl_play" }, 1 },
+    { "cb_free",        { "cb_ready", "cb_filehash", "cb_listhash", "cb_wipe", "cb_dispatch",
+                          "cb_gate", "cb_fetch" }, 7 },
     { "autoplay",       { "ap_ln_state", "ap_ln_tick", "ap_note_win", "ap_arctap_win",
                           "ap_swallow_judge", "ap_swallow_batch", "ap_swallow_touch",
                           "ap_arc_visual", "ap_tickcnt1", "ap_tickcnt2" }, 10 },
@@ -1010,10 +1139,14 @@ void xrc_brk_setup(uint64_t image_base) {
     // 配对标记 ②：链进度覆盖桩（chain_prog，7.0 新增「链」系统的查表点）由本 dylib 处理；
     // 旧 dylib 命中该站点会重放原指令 → 崩因依旧，注入脚本据此拒配。此桩**不设开关、恒生效**。
     xrc_logi(XRCLC_BOOT, @"[brk] chain-guard v1 ready (chain_prog -> 100, always-on)");
+    // 配对标记 ③：全条件放行族（lock_all/play_gate/cond_unlock_*/jacket_*/dl_play）。
+    // jacket_* 是 no-replay 条件分支桩（旧 dylib 无处理器时落兜底/默认陷阱）→ 注入脚本据此拒配。
+    xrc_logi(XRCLC_BOOT, @"[brk] unlock-policy v1 ready (lock_all/play_gate/cond_unlock/jacket_* -> unlockAll; dl_play -> dlReady)");
     // 开关组（策略/plist 驱动）
-    xrc_logi(XRCLC_BOOT, @"[brk] switches: own=%d fv=%d do=%d gate=%d (slots=%d)",
+    xrc_logi(XRCLC_BOOT, @"[brk] switches: own=%d fv=%d do=%d gate=%d all=%d dl=%d (slots=%d)",
             (int)atomic_load(&s_unlock_own), (int)atomic_load(&s_unlock_fv),
             (int)atomic_load(&s_unlock_do),  (int)atomic_load(&s_gate_open),
+            (int)atomic_load(&s_unlock_all), (int)atomic_load(&s_dl_ready),
             atomic_load(&s_count));
 #if XRC_DEBUG_BUILD
     xrc_brk_capture_enable(true);   // applog 明文/密文捕获（开发构建）

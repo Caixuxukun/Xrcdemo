@@ -43,14 +43,21 @@ void xrc_brk_setup_early(void);
 //   fv   → lock_fv（FV 五曲 fast path → 五难度全解）
 //   do   → lock_do（DO/konzetsu 分支）
 //   gate → fv_gate（终章链门；1 = 放行，决定整表是否解锁）
+//   all  → lock_all/play_gate/cond_unlock_*（全条件放行：锁态总源/可玩性总源/难度条件恒真，
+//          另与 do 联动旁路锁绘族——本地有谱面即可见可玩、曲绘不显锁）
+//   dl   → dl_play（下载"需动作"谓词恒 0：开局不转下载弹窗；文件存在性仍由开局链亲验）
 void xrc_brk_set_unlock_own(bool on);
 void xrc_brk_set_unlock_fv(bool on);
 void xrc_brk_set_unlock_do(bool on);
 void xrc_brk_set_gate_open(bool on);
+void xrc_brk_set_unlock_all(bool on);
+void xrc_brk_set_dl_ready(bool on);
 bool xrc_brk_unlock_own(void);
 bool xrc_brk_unlock_fv(void);
 bool xrc_brk_unlock_do(void);
 bool xrc_brk_gate_open(void);
+bool xrc_brk_unlock_all(void);
+bool xrc_brk_dl_ready(void);
 
 // ---- cb 验证链开关（功能账 §3）----
 // 置真后：就绪位恒真、逐文件与三清单校验恒通过、清树直返（cb 自由化）。

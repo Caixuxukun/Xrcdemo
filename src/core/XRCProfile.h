@@ -225,22 +225,56 @@
 // 开关（xrc_brk_set_cb_bypass）置真：
 //   cb_ready             → 就绪位恒真（w0=1 直返；覆盖冷启动 caller 尾部的就绪判定）
 //   cb_filehash/listhash → 校验恒通过（B.NE 恒不跳；成功块照常置 valid）
-//   cb_wipe              → 清树入口直返（内容树保持原样）
+//   cb_wipe              → 清树入口直返（cb/meta* 与 cb/active 整树保持原样）
 //   cb_dispatch          → 更新错码分发入口直返（错误弹窗/返回标题不发生）
-#define XRC_BRK_CB_READY_SITE_OFF    (0xF43274ULL)  // LDRB W0,[X0,#0xA]; RET（8B 函数）
+//   cb_gate              → 内容更新强制门入口直返 w0=0（不弹窗、不换场回标题）
+//   cb_fetch             → 内容包更新指令处理器入口直返（忽略服务器更新指令，设备内容即真值）
+#define XRC_BRK_CB_READY_SITE_OFF    (0xF43274ULL)  // LDRB W0,[X0,#0x28]; RET（8B 函数；0x28 = cb 有效性字节）
 #define XRC_BRK_CB_READY_REPLAY_OFF  (0x1468078ULL)
 // cb 自由化：让校验结论恒为通过的三站点（开关 xrc_brk_set_cb_bypass）：
 //   ① 逐文件 sha256 比较 B.NE（不跳=视为相等）  ② 三清单 HMAC 比较 B.NE（同上，成功块照常置 valid）
-//   ③ 清树入口直返（内容树保持原样）
+//   ③ 清树入口直返（cb/meta* 与 cb/active 整树保持原样）
 // ⚠ ① ② 为 PC 相对条件分支：重放跳板会在别处算错目标 ⇒ replay=0，handler 按 NZCV 自行复现。
 #define XRC_BRK_CB_FILEHASH_SITE_OFF   (0xF44F9CULL)   // B.NE loc_100F451C0
 #define XRC_BRK_CB_FILEHASH_TARGET_OFF (0xF451C0ULL)   // 不等 → 失败路径（关开关时复现用）
 #define XRC_BRK_CB_LISTHASH_SITE_OFF   (0xF450B0ULL)   // B.NE loc_100F451D4
 #define XRC_BRK_CB_LISTHASH_TARGET_OFF (0xF451D4ULL)
-#define XRC_BRK_CB_WIPE_SITE_OFF       (0xF43C08ULL)   // 清树入口（SUB SP,SP,#0x70）
+// 清树函数 sub_100F43C08（0x43C08-0x43FA0 实读）：删 cb/meta_old.cb、cb/meta.cb、cb/meta_new.cb
+// 三个文件（fs vtable+0x140），**rm -r 递归删 cb/active 整树**（vtable+0x138；"cb/active" 与 "cb/active/"
+// 两次调用），再清内存态（meta map 清空 + 有效性字节 0x28=0 + 版本/uuid 串清空）。此处即
+// research/notes/xrc-cb-merged-2026-09-15.md 行 28 所记"清 meta×3 + rm -r cb/active = 就地清理"——
+// 此前两次"cb 被清"事件的执行体。校验任一环节失败都会调它 ⇒ 无 meta.cb / 校验不过时，
+// meta 文件与整个 cb/active 内容树都会被删；"场景 1（有 meta 但校验不过）"被清后，
+// 第二次启动即退化为"场景 2（无 meta.cb）"。入口 SUB SP,SP,#0x70，重放安全。
+#define XRC_BRK_CB_WIPE_SITE_OFF       (0xF43C08ULL)
 #define XRC_BRK_CB_WIPE_REPLAY_OFF     (0x1468120ULL)
-#define XRC_BRK_CB_DISPATCH_SITE_OFF (0x13C5E8ULL)  // 更新错码分发入口（SUB SP,SP,#0x100）
+// 更新错码分发 sub_10013C5E8（void）：v7==5「A new version of Arcaea is available…」、
+// v7==9/11 → sub_100131678（在线时弹「This version of Arcaea is preparing for release…」）、
+// 其余非零 →「Failed to get the latest content information…Error Code」。入口 SUB SP,SP,#0x100，重放安全。
+#define XRC_BRK_CB_DISPATCH_SITE_OFF (0x13C5E8ULL)
 #define XRC_BRK_CB_DISPATCH_REPLAY_OFF (0x1468088ULL)
+// ---- cb 自由化 · 版本/更新链（无 meta.cb 情形；2026-10-12 补）----
+// 场景：本机没有 meta.cb（用户手填内容包）→ cb 版本串恒为空（0x30/0x48 两串无值）+
+// 校验器在版本比较失败时把有效性字节置 0 —— 版本/更新层还有两处会把用户挡在门外：
+//   ①「内容更新强制门」sub_1001963D8（OnlineManager::tryHandleContentBundleOldError，长 0x268）：
+//      本机场景：本地版本串空 → 无论私服还是官服，内容包版本门（code 11）必判「过旧」→
+//      弹「A new content update is required. Returning to title screen.」+
+//      换场回标题（tag 162411）⇒ 拒绝进入。调用者 = 68 个 HTTP 端点响应处理器
+//      （0x1007FA490-0x100819C78 全家族；样本 sub_1007FFD84 行 31-33、sub_1008003C8：
+//      code==11 → 调本门，返 0 则照常把错误码交给请求完成路径）。
+//      开关开 → x0=0 直返 = 其自身「已在标题/转场场景、无事可做」的既有早退语义（不弹窗不换场，
+//      调用方照常走完成路径）。入口序言 SUB SP,SP,#0xF0（SP 相对、重放安全）。
+//   ②「内容包更新指令处理器」sub_100815498（0x1B0 帧；+0xA0 处引 "orderedResults"）：
+//      处理 /game/content_bundle 响应里的服务端更新指令（orderedResults = 分片化更新清单）。
+//      出处 research/notes/xrc-plugin-site-semantics-2026-09-19.md §3.1：入口直返 =
+//      「忽略服务器的内容包更新指令，设备内容即真值」（与 cb_* 互补：一个管本地校验、一个管远端更新；
+//      离线场景不可达——无响应；开发构建私服 XRC_STRIP_CONTENT_BUNDLE=False 时必达）。
+//      入口序言 SUB SP,SP,#0x1B0（SP 相对、重放安全）。函数身份证据=[高]（字符串引用+前作笔记），
+//      内部动作未逐行核实=[中]，故桩只做"入口直返"不做任何内部手术。
+#define XRC_BRK_CB_GATE_SITE_OFF     (0x1963D8ULL)   // 内容更新强制门入口（SUB SP,SP,#0xF0）
+#define XRC_BRK_CB_GATE_REPLAY_OFF   (0x1468128ULL)
+#define XRC_BRK_CB_FETCH_SITE_OFF    (0x815498ULL)   // 内容包更新指令处理器入口（SUB SP,SP,#0x1B0）
+#define XRC_BRK_CB_FETCH_REPLAY_OFF  (0x1468130ULL)
 
 // ---------------- 未注册桩位还原表（自愈用）----------------
 // cb_verify（= 校验函数 sub_100F43FFC 入口）不在当前桩表中，但既有二进制可能留有它的
@@ -311,6 +345,61 @@
 //   入口指令 SUB SP,#0xB0（重放安全）；配对标记 "chain-guard v1"。
 #define XRC_BRK_CHAIN_PROG_SITE_OFF     (0x98FB1CULL)
 #define XRC_BRK_CHAIN_PROG_REPLAY_OFF   (0x1468118ULL)
+
+// ---------------- BRK 桩：全条件放行族（unlock_all / dl_ready；2026-10-12 取证）----------------
+// 出处: 本版原生二进制（samples/arcaea/7.0.255/ios/work/stage1/Arc-mobile，md5 49fbbba8…）
+//   逐函数反汇编 + 调用点扫描；与前作 xrc-packlock-rootcause / xrc-chain-regression /
+//   xrc-download-state-rootcause 三笔记交叉一致。
+// 目标（第一性原理）：**本地存在合法谱面（该难度在 songlist 声明，song+0x250[idx]!=0）时，
+//   任何"条件"不得阻止其可见、可游玩**。四处判定源头（覆盖 44+70+37/19+2 个调用点）：
+//   ① 锁态总源 sub_100919E5C（入口 SUB SP,#0xB0）——五字节打包 b0..b4=1 才显示"全解锁"；
+//      44 个调用点（选曲 cell/曲绘/横幅/世界/包页）全部读它。直返 0x0101010101。
+//   ② 可玩性总源 sub_100919874（入口 SUB SP,#0x60）——选曲 start 钮/开局链的唯一谓词，
+//      70 个调用点且消费方按 CBNZ=可用 判（50 8EAF84、70 B60ECC L621 为典型）。直返 1。
+//      ⚠ 守卫：仅当该难度"已声明"才放行（song+0x250[BDCD20(diff)]!=0）——没有谱面的难度
+//      不硬开，避免开局加载失败 __cxa_throw（scene_run_7x.c L589-707 的崩点）。
+//   ③ 难度条件 sub_100BDC5A8（入口 SUB SP,#0x90）/ sub_100BDC8D4（入口 SUB SP,#0x60）
+//      ——"解锁条件"对象求值（SpellMagnolia/Arghena*/conditions 家族）。除两个总源内部调用外
+//      另有 37/19 个独立调用点（cell 徽记、难度格可用性）。直返 1（条件恒满足）。
+//   ④ 下载"需动作"谓词 sub_100850308（入口 STP X22,X21,[SP,#-0x30]!）——启动钮 download.png
+//      图标与开局转"Download song?"弹窗的唯一谓词（仅 2 调用点：B60ECC、C117F4）。
+//      直返 0（无需动作）。⚠ 不改 sub_100844774（下载机制本体，2026-09-28 教训），
+//      仅旁路"UI/开局截流"；文件真实存在性仍由开局链亲自校验（缺文件 → 温和失败+重扫）。
+// 开关：unlock_all（①②③；默认关）、dl_ready（④；默认关，纪律见 xrc-download-stack-cocos §8）。
+// 另：锁绘分支族（四处，见下）随 unlock_all || unlock_do 联动（显示一致性）。
+#define XRC_BRK_LOCK_ALL_SITE_OFF      (0x919E5CULL)   // ① sub_100919E5C 入口
+#define XRC_BRK_LOCK_ALL_REPLAY_OFF    (0x1468138ULL)  // ⚠ 0x128/0x130 已被 cb_gate/cb_fetch 占用
+#define XRC_BRK_PLAY_GATE_SITE_OFF     (0x919874ULL)   // ② sub_100919874 入口
+#define XRC_BRK_PLAY_GATE_REPLAY_OFF   (0x1468140ULL)
+#define XRC_BRK_COND_UNLOCK_A_SITE_OFF (0xBDC5A8ULL)   // ③ sub_100BDC5A8 入口
+#define XRC_BRK_COND_UNLOCK_A_REPLAY_OFF (0x1468150ULL)
+#define XRC_BRK_COND_UNLOCK_B_SITE_OFF (0xBDC8D4ULL)   // ③ sub_100BDC8D4 入口
+#define XRC_BRK_COND_UNLOCK_B_REPLAY_OFF (0x1468158ULL)
+#define XRC_BRK_DL_PLAY_SITE_OFF       (0x850308ULL)   // ④ sub_100850308 入口
+#define XRC_BRK_DL_PLAY_REPLAY_OFF     (0x1468148ULL)
+// arghena 专属锁绘旁路：sub_10084EE7C 内 0x84EF48 的 `TBNZ X0,#0x20`（X0 = sub_100919E5C
+//   返回值，bit32 = b4/INS）。置位 → 落 0x84F05C → 调 sub_10084F0E8 →（包==konzetsu）
+//   `img/jacket_locked_konzetsu.jpg`。⚠ 该位与"五难度全解"共用（unlockDo/unlockAll 置 b4=1
+//   ⇒ arghena 曲绘变"锁绘"）→ 本桩 ON 时恒"不跳"（普通曲绘）、OFF 时按位复现原分支。
+// 锁绘分支族（四处，均为 PC 相对条件分支 → no-replay，handler 按位复现；开关 = unlock_all ||
+//   unlock_do）。全链证据：sub_10084F0E8 = 锁绘选择器（包 konzetsu/finale → jacket_locked_*；
+//   id grievouslady/tempestissimo → "img/jacket_locked_"+id；undyingmacula 专属；其余 →
+//   img/1080/jacket_locked_generic.jpg  @0x10137D770），触发器 = 锁态 b4 置位：
+//   · ①0x84EF48（84EE7C 内，arghena 门）→ 落 0x84F05C；
+//   · ②0x8EAFB4（选曲 cell，sub_1008EAB50）`TBNZ X8,#0x20`→0x8EAFDC（锁绘）；
+//     不跳 = 0x8EAFB8（84EE7C 普通曲绘）。X8 = 该函数早段 919E5C 结果（存 [sp+0x18]）。
+//   · ③0x94A57C（曲目信息面板）`TBNZ X0,#0x20`→0x94A59C（锁绘）；不跳 = 84EE7C 普通。
+//   · ④0xB3F274（详情面板）`TBZ X24,#0x20`→0xB3F2A4（跳过 84F0E8 = 保留 84EE7C 普通结果，
+//     0xB3F250 已先写好普通曲绘；置位则 84F0E8 结果覆写）→ 本族唯一"置位落锁绘"的 TBZ 形态。
+//   OFF 时四处均按位复现（逐字节同原行为）；ON 时恒走普通曲绘侧。
+#define XRC_BRK_JACKET_LOCK_SITE_OFF   (0x84EF48ULL)
+#define XRC_BRK_JACKET_LOCK_TARGET_OFF (0x84F05CULL)   // 原 TBNZ 跳转目标（同函数内）
+#define XRC_BRK_JACKET_CELL_SITE_OFF   (0x8EAFB4ULL)
+#define XRC_BRK_JACKET_CELL_TARGET_OFF (0x8EAFDCULL)
+#define XRC_BRK_JACKET_INFO_SITE_OFF   (0x94A57CULL)
+#define XRC_BRK_JACKET_INFO_TARGET_OFF (0x94A59CULL)
+#define XRC_BRK_JACKET_PANEL_SITE_OFF  (0xB3F274ULL)
+#define XRC_BRK_JACKET_PANEL_TARGET_OFF (0xB3F2A4ULL)
 
 // ---------------- 弧/绘制观测桩（只观测；站点语义见 XRCHook.m）----------------
 // 三处都打在**入口 +4**（第二条指令），入口的 SUB SP 照常执行 ⇒ SP 自然正确；

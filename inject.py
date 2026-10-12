@@ -80,17 +80,28 @@ BRK_HOOKS = [
     ("unlock_l2",  0x100BE46EC, 0x101468060, "ff0302d1"),  # 层2 sub_100BE46EC 入口（SUB SP,#0x80）
     ("unlock_l3",  0x100BE4D38, 0x101468068, "fd7bbfa9"),  # 层3 sub_100BE4D38 入口（STP X29,X30,[SP,#-0x10]!）
     # ---- cb 验证链（功能账 §3）----
-    ("cb_ready",    0x100F43274, 0x101468078, "00a04039"),  # 就绪位 getter（LDRB W0,[X0,#0xA];RET）
+    ("cb_ready",    0x100F43274, 0x101468078, "00a04039"),  # 就绪位 getter（LDRB W0,[X0,#0x28];RET）
     # cb 自由化：让校验结论恒为通过，并保持成功路径完整：
     #   ① 逐文件 sha256 比较的 B.NE → 恒不跳（视为相等）
     #   ② 三清单 HMAC 比较的 B.NE → 恒不跳（成功块照常写 valid=1 并回填版本串）
-    #   ③ 清树函数入口 → 直接返回（cb/meta* 不因文件缺失/被改而被清）
+    #   ③ 清树函数入口 → 直接返回（cb/meta*.cb 与 cb/active 整树不因校验失败被删）
     #   ⚠ ① ② 是 PC 相对条件分支，**不能进重放跳板**（会在别处算错目标）；handler 内按 NZCV
     #     自行复现分支，故 replay=0（no-replay）。
     ("cb_filehash", 0x100F44F9C, None, "21110054"),  # B.NE loc_100F451C0（逐文件 32B sha256 比较）
     ("cb_listhash", 0x100F450B0, None, "21090054"),  # B.NE loc_100F451D4（三表 HMAC 比较）
     ("cb_wipe",     0x100F43C08, 0x101468120, "ffc301d1"),  # 清树入口（SUB SP,#0x70）
     ("cb_dispatch", 0x10013C5E8, 0x101468088, "ff0304d1"),  # 更新错码分发入口（SUB SP,#0x100）
+    # ---- cb 版本/更新链（无 meta.cb 情形；2026-10-12 补；语义/证据链见 XRCProfile.h 同名块）----
+    # ① 内容更新强制门 sub_1001963D8（OnlineManager::tryHandleContentBundleOldError）：
+    #    服务端 code 11（内容包过旧）→「A new content update is required...returning to title」
+    #    + 换场回标题；68 个调用者 = HTTP 端点响应处理器家族（0x1007FA490-0x100819C78）。
+    #    开关开 → x0=0 直返（镜像其"已在标题/转场场景"的合法早退：不弹窗不换场）；关 → 重放原序言。
+    ("cb_gate",     0x1001963D8, 0x101468128, "ffc303d1"),  # 更新强制门入口（SUB SP,#0xF0）
+    # ② 内容包更新指令处理器 sub_100815498（+0xA0 处引响应字段 orderedResults）：
+    #    入口直返 = 忽略服务器更新指令（设备内容即真值）；函数身份 [高]、内部动作 [中]（见
+    #    XRCProfile.h），桩只做入口直返。出处 research/notes/xrc-plugin-site-semantics-2026-09-19.md
+    #    §3.1。离线不可达（无响应）。
+    ("cb_fetch",    0x100815498, 0x101468130, "ffc306d1"),  # 内容包响应处理器入口（SUB SP,#0x1B0）
     # ---- 自动演奏（外部参考实现对齐；功能账 §5.2）----
     # 站点语义/handler 见 XRCProfile.h + XRCHook.m；开关 xrc_judge_set_autoplay（默认关）。
     # 关时各站重放原指令，行为与未注入一致；开启后长条走原版 Pure tick、窗口点强判、
@@ -122,6 +133,29 @@ BRK_HOOKS = [
     #   id 注册 → 改名/挪包即 NULL → 不判空 → 读 [NULL+0x28] 崩。入口直返 100（无对象进度值）。
     #   **不设开关、恒生效**（守崩桩）；dylib 侧配对标记 "chain-guard v1"。
     ("chain_prog",       0x10098FB1C, 0x101468118, "ffc302d1"),  # SUB SP,#0xB0（链进度 sub_10098FB1C 入口）
+    # ---- 全条件放行（unlock_all / dl_ready；2026-10-12；站点/证据链见 XRCProfile.h 同名块）----
+    # 目标：本地存在合法谱面（难度已声明 song+0x250[idx]）时，任何"条件"不得阻止可见/可玩。
+    #   ① lock_all   = 锁态总源 sub_100919E5C（44 调用点：cell/曲绘/横幅/世界/包页）→ 0x0101010101
+    #   ② play_gate  = 可玩性总源 sub_100919874（70 调用点：start 钮/开局链）→ 1（守卫：难度须已声明）
+    #   ③ cond_unlock_a/b = 难度条件求值 sub_100BDC5A8/sub_100BDC8D4（解锁条件对象家族）→ 1
+    #   ④ dl_play    = 下载"需动作"谓词 sub_100850308（2 调用点：start 钮图标/开局弹窗分流）→ 0
+    #      ⚠ 不动 sub_100844774（下载机制本体，2026-09-28 教训）；缺文件仍由开局链温和失败+重扫。
+    #   ⑤ jacket_lock = sub_10084EE7C 内 0x84EF48 `TBNZ X0,#0x20`（arghena 专属锁绘分支；
+    #      与 unlockDo/unlockAll 的 b4=1 联动）。**no-replay**（PC 相对条件分支，handler 按位复现）。
+    #   配对标记 "unlock-policy v1"（dylib 侧须存在，缺则拒配——见 main() 的配对校验）。
+    ("lock_all",         0x100919E5C, 0x101468138, "ffc302d1"),  # SUB SP,#0xB0（锁态总源入口）
+    ("play_gate",        0x100919874, 0x101468140, "ff8301d1"),  # SUB SP,#0x60（可玩性总源入口）
+    ("dl_play",          0x100850308, 0x101468148, "f657bda9"),  # STP X22,X21,[SP,#-0x30]!（需动作谓词入口）
+    ("cond_unlock_a",    0x100BDC5A8, 0x101468150, "ff4302d1"),  # SUB SP,#0x90（难度条件求值 A）
+    ("cond_unlock_b",    0x100BDC8D4, 0x101468158, "ff8301d1"),  # SUB SP,#0x60（难度条件求值 B）
+    # 锁绘分支族（四处，no-replay：PC 相对条件分支，handler 按位复现；开关 = unlockAll || unlockDo）。
+    # 触发器 = 锁态 bit32（b4）；置位 → sub_10084F0E8 锁绘选择器（konzetsu/finale/grievouslady/
+    # tempestissimo/undyingmacula → jacket_locked_*，其余 → img/1080/jacket_locked_generic.jpg）。
+    # 开关开时恒走普通曲绘侧。站点/目标均取自原生二进制反汇编（XRCProfile.h 同名块有全链证据）。
+    ("jacket_lock",      0x10084EF48, None,        "a00800b7"),  # TBNZ X0,#0x20（84EE7C 内 arghena 门；目标 0x84F05C）
+    ("jacket_cell",      0x1008EAFB4, None,        "480100b7"),  # TBNZ X8,#0x20（选曲 cell；目标 0x8EAFDC）
+    ("jacket_info",      0x10094A57C, None,        "000100b7"),  # TBNZ X0,#0x20（曲目信息面板；目标 0x94A59C）
+    ("jacket_panel",     0x100B3F274, None,        "980100b6"),  # TBZ  X24,#0x20（详情面板；目标 0xB3F2A4=跳过锁绘）
     # ---- 弧/绘制观测桩（只观测不改行为；handler 见 XRCHook.m"弧/绘制 观测桩"）----
     # 三处都是函数入口，首指令均为 SUB SP,SP,#N（非 PC 相对 ⇒ 可重放）。
     # ⚠ 这三条打在**入口 +4**：入口的 `SUB SP,SP,#N` 照常执行 ⇒ SP 自然正确；
@@ -163,8 +197,15 @@ FEATURES = [
      "曲目锁态覆盖（FV/DO 五难度全解）+ 终章链门放行（整表解锁总闸）"),
     ("chain_guard",    ["chain_prog"],                                             True,  "required",
      "7.0 链查表守崩桩（恒生效；防改名/挪包 NULL 崩）"),
-    ("cb_free",        ["cb_ready", "cb_filehash", "cb_listhash", "cb_wipe", "cb_dispatch"], True, "stable",
-     "cb 自由化：校验结论恒通过且保持成功路径回填；清树调用直返，内容树保持原样（离线自改内容的前提）"),
+    ("unlock_all",     ["lock_all", "play_gate", "cond_unlock_a", "cond_unlock_b",
+                        "jacket_lock", "jacket_cell", "jacket_info", "jacket_panel"],
+                                                                                   True,  "stable",
+     "全条件放行：锁态/可玩性/难度条件判定源头恒真（开关 unlockAll；锁绘族与 unlockDo 联动）"),
+    ("dl_ready",       ["dl_play"],                                                True,  "stable",
+     "本地内容放行：下载'需动作'谓词恒 0（开关 dlReady 默认关；文件真实存在性仍由开局链亲验）"),
+    ("cb_free",        ["cb_ready", "cb_filehash", "cb_listhash", "cb_wipe", "cb_dispatch",
+                        "cb_gate", "cb_fetch"],                                    True, "stable",
+     "cb 自由化：校验结论恒通过且保持成功路径回填；清树调用直返；就绪恒真；更新错码分发/更新强制门/远端更新指令直返（无 meta.cb 亦可进入）"),
     ("autoplay",       ["ap_ln_state", "ap_ln_tick", "ap_note_win", "ap_arctap_win",
                         "ap_swallow_judge", "ap_swallow_batch", "ap_swallow_touch",
                         "ap_arc_visual", "ap_tickcnt1", "ap_tickcnt2"],           True,  "stable",
@@ -835,6 +876,18 @@ def main():
             print("[!] dylibs lack 'chain-guard v1' support —")
             print("    chain_prog BRK would replay the original lookup → NULL deref crash")
             print("    for renamed ids / moved packs. Refusing to mix.")
+            sys.exit(3)
+
+    # 同款配对校验：全条件放行族（unlock_all/dl_ready 诸站）需要 dylib 侧处理器。
+    # jacket_* 是 no-replay 条件分支桩：旧 dylib 无处理器时会落兜底/默认陷阱 → 必须拒配。
+    if any(n in ("lock_all", "play_gate", "dl_play", "cond_unlock_a", "cond_unlock_b",
+                 "jacket_lock", "jacket_cell", "jacket_info", "jacket_panel")
+           for n, _s, _r, _e in BRK_HOOKS):
+        marker = b"unlock-policy v1"
+        if not any(marker in open(d, "rb").read() for d in dylibs):
+            print("[!] dylibs lack 'unlock-policy v1' support —")
+            print("    unlock-policy BRK sites (incl. no-replay jacket_lock) would fall")
+            print("    through to the default trap handlers. Refusing to mix.")
             sys.exit(3)
 
     os.makedirs(FW_DIR, exist_ok=True)

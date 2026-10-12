@@ -94,6 +94,7 @@ static NSString *const kNoteSpeed =
 @property (nonatomic, assign) NSInteger curTab;
 // 行状态引用（重建时重新捕获；refresh 镜像引擎真值）
 @property (nonatomic, strong) UILabel *stAutoplay;
+@property (nonatomic, strong) UILabel *stUnlockAll;
 @property (nonatomic, strong) UILabel *stOwn, *stFv, *stDo, *stGate, *stCb, *stNet, *stStore, *stStubs;
 @property (nonatomic, strong) UILabel *valNet;
 @property (nonatomic, strong) UILabel *netStat, *storeStat;
@@ -670,6 +671,7 @@ static NSString *const kNoteSpeed =
     if (!self.pane) return;
     for (UIView *v in [self.pane.subviews copy]) [v removeFromSuperview];
     self.stAutoplay = nil;
+    self.stUnlockAll = nil;
     self.stOwn = self.stFv = self.stDo = self.stGate = self.stCb = self.stNet = self.stStore = self.stStubs = nil;
     self.valNet = nil;
     self.netStat = self.storeStat = self.judgeStatus = nil;
@@ -716,6 +718,14 @@ static NSString *const kNoteSpeed =
     } else if (t == 1) {   // 解锁
         self.paneHint.text = @"离线/未授予时才有意义";
         __weak typeof(self) ws = self;
+        // 总闸一行：开＝FV/DO/难度条件/全曲可玩/锁绘/下载谓词一体放行；关＝全部恢复原行为。
+        if (xrc_feature_present("unlock_all")) {
+            self.stUnlockAll = [self toggleRowIn:self.pane y:y title:@"全部解锁"
+                                              on:xrc_brk_unlock_all()
+                                           block:^{ [ws toggleUnlockAll]; }
+                                            note:@"一体放行：FV/DO 五难度、难度条件、全曲可见可玩、锁绘、下载谓词；关＝逐字节恢复原行为。"];
+            y += xrc_theme_px(38);
+        }
         NSArray *titles = @[@"拥有链", @"FV 锁", @"DO 锁", @"链门（总闸）", @"cb 自由化"];
         NSArray *feats  = @[@"unlock_own", @"unlock_lock", @"unlock_lock", @"unlock_lock", @"cb_free"];
         for (int i = 0; i < 5; i++) {
@@ -1070,6 +1080,18 @@ static NSString *const kNoteSpeed =
     } while (0)
 
 - (void)toggleOwn    { XRC_TOGGLE_SWITCH(unlock_own, xrc_brk_set_unlock_own, @"拥有链：三层恒真（覆盖未授予场景）", @"拥有链：恢复原判定"); }
+// 总闸：翻 unlock_all 后同步联动旧细项（与 Tweak.x apply 规则一致：OR 生效、关=原行为）
+- (void)toggleUnlockAll {
+    XRC_TOGGLE_SWITCH(unlock_all, xrc_brk_set_unlock_all,
+                      @"全部解锁：开（FV/DO/条件/全曲/锁绘/下载谓词一并放行）",
+                      @"全部解锁：关（全部恢复原行为）");
+    xrc_config_t c; xrc_config_load(&c);
+    xrc_brk_set_unlock_fv(c.unlock_fv || c.unlock_all);
+    xrc_brk_set_unlock_do(c.unlock_do || c.unlock_all);
+    xrc_brk_set_gate_open(c.gate_open || c.unlock_all);
+    xrc_brk_set_dl_ready(c.unlock_all);
+    [self refresh];
+}
 - (void)toggleFv     { XRC_TOGGLE_SWITCH(unlock_fv,  xrc_brk_set_unlock_fv,  @"FV 锁：五难度全解", @"FV 锁：恢复原判定"); }
 - (void)toggleDo     { XRC_TOGGLE_SWITCH(unlock_do,  xrc_brk_set_unlock_do,  @"DO 锁：五难度全解（显示专属曲绘）", @"DO 锁：恢复原判定"); }
 - (void)toggleGate   { XRC_TOGGLE_SWITCH(gate_open,  xrc_brk_set_gate_open,  @"链门：放行（整表解锁总闸）", @"链门：恢复原判定"); }
@@ -1257,6 +1279,7 @@ static NSString *const kNoteSpeed =
     [self setState:self.stReplay on:xrc_replay_enabled()];
     [self setState:self.chipLoop on:xrc_loop_get_enabled()];
     [self setState:self.stAutoplay on:xrc_judge_autoplay()];
+    [self setState:self.stUnlockAll on:xrc_brk_unlock_all()];
     [self setState:self.stOwn on:xrc_brk_unlock_own()];
     [self setState:self.stFv on:xrc_brk_unlock_fv()];
     [self setState:self.stDo on:xrc_brk_unlock_do()];
