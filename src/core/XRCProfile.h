@@ -1,5 +1,6 @@
 // © 雾月星辰 & MLXC · github@XingChenRS
-// XRCProfile.h — 版本契约（Arcaea iOS 7.0.255）。
+// XRCProfile.h — 7.0.256 build 1209864 静态适配；尚未真机验证。
+// 地址证据见 RELOCATION_7.0.256.md 和 relocation.json；下方旧版注释仅作历史参考。
 // 跨版本迁移只改本文件（+ 注入器 inject.py 侧对应常量）——每个版本按指纹重定位。
 //
 // ---- 分区目录（按主题检索）----
@@ -56,11 +57,11 @@
 // 出处: 逆向笔记 §2/§3
 // （vtable RTTI 名 9GameScene 已验；本文件所有值均为 image 偏移，
 //   运行时地址 = image_base + offset）
-#define XRC_OFF_GP_VTABLE          (0x151D8C0ULL)   // 绝对 VA 0x10151D8C0
+#define XRC_OFF_GP_VTABLE          (0x1521DC0ULL)   // 绝对 VA 0x10151D8C0
 // 每帧更新 = vtable 槽 103 sub_100CA7160（帧去重模式与 6.13 gp.update 同源：
 // 全局时间 +308 == self+1168 走快路径；否则 tick note group + 判定分发）。
 // 槽 155（sub_100CA118C）是场景初始化函数（只跑一次），不是每帧更新。
-#define XRC_OFF_GP_UPDATE_FN       (0xCA7160ULL)    // 五参 (self,a2,a3,a4,a5)，同 6.13
+#define XRC_OFF_GP_UPDATE_FN       (0xCAA7C0ULL)    // 五参 (self,a2,a3,a4,a5)，同 6.13
 
 // ---------------- 桩点（改判） ----------------
 // 出处: 逆向笔记。判定核心 = sub_10091E684（与 6.13 sub_100870FD0 逐行同构的整数 CMP 级联；
@@ -68,16 +69,16 @@
 // ABI: X0 = note_group, X1 = note, X2 = ts（判定时刻 ms）；返回 1 = 消费该 note，
 // 0 = Miss（不消费）。handler 另收 X3 = caller X6（跳板 v2 的 MOV X3,X6）。
 #define XRC_HAS_JUDGE_STUB          1
-#define XRC_JUDGE_STUB_ENTRY_OFF    (0x91E684ULL)   // sub_10091E684（判定核心，2 处直接 BL 调用）
-#define XRC_OFF_JUDGE_COMMIT_FN     (0xACB880ULL)   // sub_100ACB880（grade 落账，6 参，首指令是门）
-#define XRC_OFF_JUDGE_COMMIT_LN_FN  (0xACB6A4ULL)   // sub_100ACB6A4（近失/长条落账，3 参）
+#define XRC_JUDGE_STUB_ENTRY_OFF    (0x920788ULL)   // sub_10091E684（判定核心，2 处直接 BL 调用）
+#define XRC_OFF_JUDGE_COMMIT_FN     (0xACDFA8ULL)   // sub_100ACB880（grade 落账，6 参，首指令是门）
+#define XRC_OFF_JUDGE_COMMIT_LN_FN  (0xACDDCCULL)   // sub_100ACB6A4（近失/长条落账，3 参）
 #define XRC_OFF_JUDGE_FX_OBJ        (64)            // note_group+64 = 特效对象
 #define XRC_OFF_JUDGE_COMMIT_OBJ    (56)            // note_group+56 = 判定计数对象
 // 桩跳板（inject.py 生成，跳板 v2 = 40B：分发 + MOV X3,X6 + native 重放 3 条）
 // 布局：ADRP/ADD(8) LDR(4) CBZ(4) MOV X3,X6(4) BR(4) → native 重放 3 条原指令
 // + B 回 entry+12。handler 从 X3 拿 caller 的 X6（判定核从不写、落账函数需要）。
 // 直通（slot.handler==0）= CBZ 跳 native，行为与未注入完全一致。
-#define XRC_STUB_TRAMP_OFF          (0x146800CULL)  // trampoline 静态偏移
+#define XRC_STUB_TRAMP_OFF          (0x146C00CULL)  // trampoline 静态偏移
 
 // 判定函数的 8 个 CMP 阈值站点（CMP Wn,#imm12）。
 // 方案：**handler + 运行时阈值**（dylib 写 __TEXT 会撞 CT/PAC）。这些偏移保留用于：
@@ -85,8 +86,9 @@
 // 分支 B（分段钟，clk+45==1）：26/51/101/121
 // 分支 A（普通钟）：25/50/100/120
 // 注入器在 __DATA 零填充尾部写入 slot（24B）+ info blob（120B，紧邻其后）。
-#define XRC_JUDGE_SLOT_OFF          (0x164AB28ULL)
-#define XRC_INFO_OFF                (0x164AB40ULL)   // slot + 24
+// 7.0.256: __XRC VA offset 0x16A8000, file offset 0x1650000; old DATA zero tail is occupied.
+#define XRC_JUDGE_SLOT_OFF          (0x16A8000ULL)
+#define XRC_INFO_OFF                (0x16A8018ULL)   // slot + 24
 
 // ---------------- retry 触发链（研究记录；**禁止调用**） ----------------
 // 出处: 逆向笔记 §11（retry 三层链路逆向）
@@ -112,8 +114,8 @@
 // 20AudioProviderFMODiOS → 7.0 typeinfo 0x1014B7690 → MTP vtable 0x1014B75B0；
 // getpos 槽 7 与 seek 槽 8 形状与 6.13 逐条一致）
 // 路线：只读位置 + seekTo。
-#define XRC_OFF_MTP_VTABLE           (0x14B75B0ULL)   // 绝对 VA 0x1014B75B0（注意：偏移是 0x14B75B0）
-#define XRC_OFF_MTP_GETPOS           (0x8E24F0ULL)    // vtable 槽 7，形状同 6.13
+#define XRC_OFF_MTP_VTABLE           (0x14BB930ULL)   // 绝对 VA 0x1014B75B0（注意：偏移是 0x14B75B0）
+#define XRC_OFF_MTP_GETPOS           (0x8E4274ULL)    // vtable 槽 7，形状同 6.13
 #define XRC_PLAYER_SEEK_SLOT_OFF     (0x40)           // vtable 槽 8，形状同 6.13
 // vtable 槽 6（+0x30）= setPaused(paused, index)：内部按 index 取通道 handle
 // （0 = 默认 *(mtp+0x18) = mainBGMGroup 句柄）后尾调 FMOD_Channel_SetPaused。
@@ -121,8 +123,8 @@
 // 逐字节相同）；7.0 的 FMOD_Channel_SetPaused 本体 = 0x1010E2CCC。详见
 // 内部设计纪要（离线记录） §1.3/§2。
 #define XRC_PLAYER_PAUSE_SLOT_OFF    (0x30)           // vtable 槽 6
-#define XRC_OFF_CH_GET_POSITION      (0x1033BBCULL)   // Channel::getPosition（内层同源）
-#define XRC_OFF_GET_CURRENT_SOUND    (0x103415CULL)   // Channel::getCurrentSound（日志串已验）
+#define XRC_OFF_CH_GET_POSITION      (0x1036D1CULL)   // Channel::getPosition（内层同源）
+#define XRC_OFF_GET_CURRENT_SOUND    (0x10372BCULL)   // Channel::getCurrentSound（日志串已验）
 // get_sound_length：未定位（进度条用 max_seen 兜底）。
 // get_registry：由 getpos hook 缓存 player 实例替代。
 #define XRC_OFF_GET_REGISTRY        0
@@ -138,19 +140,19 @@
 //     ② 组上挂内置 Pitch Shifter，参数 1/rate 把音高补回来 ⇒ 时长随速度、音高不变
 //     ③ 移调 DSP 有固有延迟（≈FFT 窗），把通道位置前移 rate·L 补偿
 //   类型号**不写死**：运行时枚举 createDSPByType + DSP::getInfo 取名字含 "Pitch" 者（XRCAudio.m）。
-#define XRC_OFF_FMOD_CC_SET_PITCH      (0x10E32F8ULL)   // ChannelControl::setPitch(cc, float)（乘数语义）
-#define XRC_OFF_FMOD_CC_ADD_DSP        (0x10E5194ULL)   // ChannelControl::addDSP(cc, index, dsp)
-#define XRC_OFF_FMOD_CREATE_DSP_BY_TYPE (0x10ABA64ULL)  // System::createDSPByType(sys, type, &dsp)
-#define XRC_OFF_FMOD_DSP_SET_PARAM_FLOAT (0x1063D74ULL) // DSP::setParameterFloat(dsp, index, value)（C API 3 参）
+#define XRC_OFF_FMOD_CC_SET_PITCH      (0x10E6458ULL)   // ChannelControl::setPitch(cc, float)（乘数语义）
+#define XRC_OFF_FMOD_CC_ADD_DSP        (0x10E82F4ULL)   // ChannelControl::addDSP(cc, index, dsp)
+#define XRC_OFF_FMOD_CREATE_DSP_BY_TYPE (0x10AEBC4ULL)  // System::createDSPByType(sys, type, &dsp)
+#define XRC_OFF_FMOD_DSP_SET_PARAM_FLOAT (0x1066ED4ULL) // DSP::setParameterFloat(dsp, index, value)（C API 3 参）
 // ⚠ **调试串 xref 的地址不是函数入口**：以 xref 地址（getParameterFloat +0x128 /
 //   getInfo +0x158）调用会进函数中段 ⇒ 序言没跑 + 出参写到栈上 ⇒ __stack_chk_fail 崩
 //   （首次变速、DSP 探测阶段）。以下地址均已回查函数起始。
-#define XRC_OFF_FMOD_DSP_GET_PARAM_FLOAT (0x1064210ULL) // DSP::getParameterFloat(dsp, idx, &v, valuestr, valuestrlen)（**5 参**）
-#define XRC_OFF_FMOD_DSP_GET_INFO      (0x1064C70ULL)   // DSP::getInfo(dsp, &name, &ver, &ch, &cw, &chh)（**6 参**）
-#define XRC_OFF_FMOD_DSP_RELEASE       (0x1062658ULL)   // DSP::release(dsp)（1 参）
-#define XRC_OFF_CH_SET_POSITION        (0x1033A94ULL)   // Channel::setPosition(ch, pos, unit)
+#define XRC_OFF_FMOD_DSP_GET_PARAM_FLOAT (0x1067370ULL) // DSP::getParameterFloat(dsp, idx, &v, valuestr, valuestrlen)（**5 参**）
+#define XRC_OFF_FMOD_DSP_GET_INFO      (0x1067DD0ULL)   // DSP::getInfo(dsp, &name, &ver, &ch, &cw, &chh)（**6 参**）
+#define XRC_OFF_FMOD_DSP_RELEASE       (0x10657B8ULL)   // DSP::release(dsp)（1 参）
+#define XRC_OFF_CH_SET_POSITION        (0x1036BF4ULL)   // Channel::setPosition(ch, pos, unit)
 #define XRC_PLAYER_BGM_GROUP_OFF       (0x18)           // AudioProviderFMODiOS + 0x18 = mainBGMGroup 句柄
-#define XRC_OFF_FMOD_SYSTEM_GLOBAL     (0x164E678ULL)   // qword_10164E678：游戏自己存的 FMOD_SYSTEM*（免落桩取用）
+#define XRC_OFF_FMOD_SYSTEM_GLOBAL     (0x1652A78ULL)   // qword_10164E678：游戏自己存的 FMOD_SYSTEM*（免落桩取用）
 
 // ---------------- BRK 桩（第二种插桩形态）----------------
 // 原理：注入器把目标指令原地改成 `BRK #0`（4B，长度
@@ -166,8 +168,8 @@
 //
 // 首个站点 = **applog 发送函数入口**（OnlineManager 槽 72）：观测 applog 触发。
 #define XRC_HAS_BRK_HOOK            1
-#define XRC_BRK_APPLOG_SITE_OFF     (0x623AECULL)   // sub_100623AEC 入口（VA 0x100623AEC）
-#define XRC_BRK_APPLOG_REPLAY_OFF   (0x1468040ULL)  // 重放跳板（__TEXT 空白页，VA 0x101468040）
+#define XRC_BRK_APPLOG_SITE_OFF     (0x6257DCULL)   // sub_100623AEC 入口（VA 0x100623AEC）
+#define XRC_BRK_APPLOG_REPLAY_OFF   (0x146C040ULL)  // 重放跳板（__TEXT 空白页，VA 0x101468040）
 #define XRC_BRK_MAX_SLOTS           64
 
 // 第二个桩点：log_blob 组装处（密文出口）。
@@ -178,8 +180,8 @@
 //   桩点 0x1006399E4（`add x0, sp, #0x1e8`，SP 相对、重放安全）；相邻的 0x1006399DC
 //   是 ADRL（PC 相对），不能在重放跳板执行。
 //   命中时 handler 从 ucontext 取 SP，整帧带走（离线再检索）。
-#define XRC_BRK_APPLOG_BLOB_SITE_OFF   (0x6399E4ULL)
-#define XRC_BRK_APPLOG_BLOB_REPLAY_OFF (0x1468050ULL)  // 紧邻上一个跳板，8B，已核对为全零
+#define XRC_BRK_APPLOG_BLOB_SITE_OFF   (0x63B6D4ULL)
+#define XRC_BRK_APPLOG_BLOB_REPLAY_OFF (0x146C050ULL)  // 紧邻上一个跳板，8B，已核对为全零
 // 整帧捕获（XRC_APPLOG_BLOB_FRAME_LEN 字节）：不做单槽假定，离线检索密文段。
 #define XRC_APPLOG_BLOB_FRAME_LEN      (0x700ULL)      // 从 SP 起抓这么多字节
 
@@ -212,13 +214,13 @@
 // 置假 → 走重放跳板，行为与未注入完全一致。
 // ⚠ 本组（拥有链三层）：归属由 cb 三清单 + 服务器授予决定，仅覆盖"服务器未授予、
 //   但本地已有内容"的情形。开关 unlockOwn 默认关。
-#define XRC_BRK_UNLOCK_L1_SITE_OFF   (0xBE46ACULL)  // 层1 第 2 条指令（首条 CBZ X1 是
+#define XRC_BRK_UNLOCK_L1_SITE_OFF   (0xBE70BCULL)  // 层1 第 2 条指令（首条 CBZ X1 是
                                                     // PC 相关指令、不可重放；本条 LDR 安全）
-#define XRC_BRK_UNLOCK_L1_REPLAY_OFF (0x1468058ULL)
-#define XRC_BRK_UNLOCK_L2_SITE_OFF   (0xBE46ECULL)  // 层2 入口（SUB SP,SP,#0x80）
-#define XRC_BRK_UNLOCK_L2_REPLAY_OFF (0x1468060ULL)
-#define XRC_BRK_UNLOCK_L3_SITE_OFF   (0xBE4D38ULL)  // 层3 入口（STP X29,X30,[SP,#-0x10]!）
-#define XRC_BRK_UNLOCK_L3_REPLAY_OFF (0x1468068ULL)
+#define XRC_BRK_UNLOCK_L1_REPLAY_OFF (0x146C058ULL)
+#define XRC_BRK_UNLOCK_L2_SITE_OFF   (0xBE70FCULL)  // 层2 入口（SUB SP,SP,#0x80）
+#define XRC_BRK_UNLOCK_L2_REPLAY_OFF (0x146C060ULL)
+#define XRC_BRK_UNLOCK_L3_SITE_OFF   (0xBE7748ULL)  // 层3 入口（STP X29,X30,[SP,#-0x10]!）
+#define XRC_BRK_UNLOCK_L3_REPLAY_OFF (0x146C068ULL)
 
 // ---------------- BRK 桩：cb 验证链（可开关，功能账 §3）----------------
 // 出处: research/notes/xrc-feature-hooks-ledger-2026-09-14.md §3（6.13→7.0 逐函数字节/结构证据）。
@@ -229,16 +231,16 @@
 //   cb_dispatch          → 更新错码分发入口直返（错误弹窗/返回标题不发生）
 //   cb_gate              → 内容更新强制门入口直返 w0=0（不弹窗、不换场回标题）
 //   cb_fetch             → 内容包更新指令处理器入口直返（忽略服务器更新指令，设备内容即真值）
-#define XRC_BRK_CB_READY_SITE_OFF    (0xF43274ULL)  // LDRB W0,[X0,#0x28]; RET（8B 函数；0x28 = cb 有效性字节）
-#define XRC_BRK_CB_READY_REPLAY_OFF  (0x1468078ULL)
+#define XRC_BRK_CB_READY_SITE_OFF    (0xF463D4ULL)  // LDRB W0,[X0,#0x28]; RET（8B 函数；0x28 = cb 有效性字节）
+#define XRC_BRK_CB_READY_REPLAY_OFF  (0x146C078ULL)
 // cb 自由化：让校验结论恒为通过的三站点（开关 xrc_brk_set_cb_bypass）：
 //   ① 逐文件 sha256 比较 B.NE（不跳=视为相等）  ② 三清单 HMAC 比较 B.NE（同上，成功块照常置 valid）
 //   ③ 清树入口直返（cb/meta* 与 cb/active 整树保持原样）
 // ⚠ ① ② 为 PC 相对条件分支：重放跳板会在别处算错目标 ⇒ replay=0，handler 按 NZCV 自行复现。
-#define XRC_BRK_CB_FILEHASH_SITE_OFF   (0xF44F9CULL)   // B.NE loc_100F451C0
-#define XRC_BRK_CB_FILEHASH_TARGET_OFF (0xF451C0ULL)   // 不等 → 失败路径（关开关时复现用）
-#define XRC_BRK_CB_LISTHASH_SITE_OFF   (0xF450B0ULL)   // B.NE loc_100F451D4
-#define XRC_BRK_CB_LISTHASH_TARGET_OFF (0xF451D4ULL)
+#define XRC_BRK_CB_FILEHASH_SITE_OFF   (0xF480FCULL)   // B.NE loc_100F451C0
+#define XRC_BRK_CB_FILEHASH_TARGET_OFF (0xF48320ULL)   // 不等 → 失败路径（关开关时复现用）
+#define XRC_BRK_CB_LISTHASH_SITE_OFF   (0xF48210ULL)   // B.NE loc_100F451D4
+#define XRC_BRK_CB_LISTHASH_TARGET_OFF (0xF48334ULL)
 // 清树函数 sub_100F43C08（0x43C08-0x43FA0 实读）：删 cb/meta_old.cb、cb/meta.cb、cb/meta_new.cb
 // 三个文件（fs vtable+0x140），**rm -r 递归删 cb/active 整树**（vtable+0x138；"cb/active" 与 "cb/active/"
 // 两次调用），再清内存态（meta map 清空 + 有效性字节 0x28=0 + 版本/uuid 串清空）。此处即
@@ -246,13 +248,13 @@
 // 此前两次"cb 被清"事件的执行体。校验任一环节失败都会调它 ⇒ 无 meta.cb / 校验不过时，
 // meta 文件与整个 cb/active 内容树都会被删；"场景 1（有 meta 但校验不过）"被清后，
 // 第二次启动即退化为"场景 2（无 meta.cb）"。入口 SUB SP,SP,#0x70，重放安全。
-#define XRC_BRK_CB_WIPE_SITE_OFF       (0xF43C08ULL)
-#define XRC_BRK_CB_WIPE_REPLAY_OFF     (0x1468120ULL)
+#define XRC_BRK_CB_WIPE_SITE_OFF       (0xF46D68ULL)
+#define XRC_BRK_CB_WIPE_REPLAY_OFF     (0x146C120ULL)
 // 更新错码分发 sub_10013C5E8（void）：v7==5「A new version of Arcaea is available…」、
 // v7==9/11 → sub_100131678（在线时弹「This version of Arcaea is preparing for release…」）、
 // 其余非零 →「Failed to get the latest content information…Error Code」。入口 SUB SP,SP,#0x100，重放安全。
-#define XRC_BRK_CB_DISPATCH_SITE_OFF (0x13C5E8ULL)
-#define XRC_BRK_CB_DISPATCH_REPLAY_OFF (0x1468088ULL)
+#define XRC_BRK_CB_DISPATCH_SITE_OFF (0x13E2A4ULL)
+#define XRC_BRK_CB_DISPATCH_REPLAY_OFF (0x146C088ULL)
 // ---- cb 自由化 · 版本/更新链（无 meta.cb 情形；2026-10-12 补）----
 // 场景：本机没有 meta.cb（用户手填内容包）→ cb 版本串恒为空（0x30/0x48 两串无值）+
 // 校验器在版本比较失败时把有效性字节置 0 —— 版本/更新层还有两处会把用户挡在门外：
@@ -273,16 +275,16 @@
 //      （停在 -1022 之后：无 compose/aggregate、无 unlock/me；cb 关则 1s 内续走；对照 c0fa5c6
 //      五点集合同机同内容全程正常）⇒ 改为**只记不跳**，重放原逻辑（等价未注入）。
 //      入口序言 SUB SP,SP,#0x1B0（SP 相对、重放安全）。函数身份证据=[高]（字符串引用+前作笔记）。
-#define XRC_BRK_CB_GATE_SITE_OFF     (0x1963D8ULL)   // 内容更新强制门入口（SUB SP,SP,#0xF0）
-#define XRC_BRK_CB_GATE_REPLAY_OFF   (0x1468128ULL)
-#define XRC_BRK_CB_FETCH_SITE_OFF    (0x815498ULL)   // 内容包更新指令处理器入口（SUB SP,SP,#0x1B0）
-#define XRC_BRK_CB_FETCH_REPLAY_OFF  (0x1468130ULL)
+#define XRC_BRK_CB_GATE_SITE_OFF     (0x1980C8ULL)   // 内容更新强制门入口（SUB SP,SP,#0xF0）
+#define XRC_BRK_CB_GATE_REPLAY_OFF   (0x146C128ULL)
+#define XRC_BRK_CB_FETCH_SITE_OFF    (0x8171B8ULL)   // 内容包更新指令处理器入口（SUB SP,SP,#0x1B0）
+#define XRC_BRK_CB_FETCH_REPLAY_OFF  (0x146C130ULL)
 
 // ---------------- 未注册桩位还原表（自愈用）----------------
 // cb_verify（= 校验函数 sub_100F43FFC 入口）不在当前桩表中，但既有二进制可能留有它的
 // BRK：命中即"无处理器的 SIGTRAP"直接闪退（pc-base = 0xF43FFC，原指令
 // STP X28,X27,[SP,#-0x60]!）。命中时就地写回原指令并重跑（自愈），见 XRCHook.m s_sigtrap。
-#define XRC_RESTORE_CB_VERIFY_SITE_OFF (0xF43FFCULL)   // 原指令 STP X28,X27,[SP,#-0x60]!
+#define XRC_RESTORE_CB_VERIFY_SITE_OFF (0xF4715CULL)   // 原指令 STP X28,X27,[SP,#-0x60]!
 
 // ---------------- BRK 桩：自动演奏（外部参考实现对齐；功能账 §5.2）----------------
 // 出处: 外部参考实现实件（离线样本，BRK 就地打桩形态）——宿主双胞胎逐指令序列对齐
@@ -298,43 +300,43 @@
 //     玩家真实触摸不干扰（外部参考实现三触控入口同款）。
 //   · 弧线视觉：场景 tick 的清态点重新置"被触"（外部参考实现 on_arc_visual_clear 同款）。
 // 开关：xrc_judge_set_autoplay（既有）。关 → 每站重放原指令，行为与未注入完全一致。
-#define XRC_BRK_AP_LN_STATE_SITE_OFF     (0x91DBC8ULL) // LDRB W8,[X0,#0x64]（长条触摸态读取点，外部参考实现 on_long_state：0x100872028）
-#define XRC_BRK_AP_LN_TICK_SITE_OFF      (0x91DC48ULL) // LDR X8,[X27]（长条判定派发前 vtable 装载，外部参考实现 on_long_tick：0x1008720A8）
-#define XRC_BRK_AP_NOTE_WIN_SITE_OFF     (0x91DD70ULL) // CMP W2,W8（W8=note+0x1C+0xC8，外部参考实现 on_note_window：0x1008721D0）
-#define XRC_BRK_AP_ARCTAP_WIN_SITE_OFF   (0x91DF34ULL) // CMP W2,W8（W8=note+0x1C+0x64，外部参考实现 on_arctap_window：0x100872394）
-#define XRC_BRK_AP_SWALLOW_JUDGE_SITE_OFF (0x91EBC8ULL) // sub_10091EBC8 入口（逐触消费；SUB SP,#0x170，外部参考实现 on_touch_handler：0x100872F70）
-#define XRC_BRK_AP_SWALLOW_BATCH_SITE_OFF (0x91F688ULL) // sub_10091F688 入口（输入批处理+漏扫；SUB SP,#0xA0，外部参考实现 on_touch_phase：0x100873A04）
-#define XRC_BRK_AP_SWALLOW_TOUCH_SITE_OFF (0x921DC4ULL) // sub_100921DC4 入口（触摸批→消费 mode0；SUB SP,#0x80，外部参考实现 on_touch_batch：0x100875AB8）
-#define XRC_BRK_AP_ARC_VISUAL_SITE_OFF   (0x91CC84ULL) // STRH WZR,[X0,#0x10]（场景 tick 弧清态，外部参考实现 on_arc_visual_clear：0x1008710B0）
-#define XRC_BRK_AP_LN_STATE_REPLAY_OFF     (0x14680B0ULL)
-#define XRC_BRK_AP_LN_TICK_REPLAY_OFF      (0x14680B8ULL)
-#define XRC_BRK_AP_NOTE_WIN_REPLAY_OFF     (0x14680C0ULL)
-#define XRC_BRK_AP_ARCTAP_WIN_REPLAY_OFF   (0x14680C8ULL)
-#define XRC_BRK_AP_SWALLOW_JUDGE_REPLAY_OFF (0x14680D0ULL)
-#define XRC_BRK_AP_SWALLOW_BATCH_REPLAY_OFF (0x14680D8ULL)
-#define XRC_BRK_AP_SWALLOW_TOUCH_REPLAY_OFF (0x14680E0ULL)
-#define XRC_BRK_AP_ARC_VISUAL_REPLAY_OFF   (0x14680E8ULL)
+#define XRC_BRK_AP_LN_STATE_SITE_OFF     (0x91FCCCULL) // LDRB W8,[X0,#0x64]（长条触摸态读取点，外部参考实现 on_long_state：0x100872028）
+#define XRC_BRK_AP_LN_TICK_SITE_OFF      (0x91FD4CULL) // LDR X8,[X27]（长条判定派发前 vtable 装载，外部参考实现 on_long_tick：0x1008720A8）
+#define XRC_BRK_AP_NOTE_WIN_SITE_OFF     (0x91FE74ULL) // CMP W2,W8（W8=note+0x1C+0xC8，外部参考实现 on_note_window：0x1008721D0）
+#define XRC_BRK_AP_ARCTAP_WIN_SITE_OFF   (0x920038ULL) // CMP W2,W8（W8=note+0x1C+0x64，外部参考实现 on_arctap_window：0x100872394）
+#define XRC_BRK_AP_SWALLOW_JUDGE_SITE_OFF (0x920CCCULL) // sub_10091EBC8 入口（逐触消费；SUB SP,#0x170，外部参考实现 on_touch_handler：0x100872F70）
+#define XRC_BRK_AP_SWALLOW_BATCH_SITE_OFF (0x92178CULL) // sub_10091F688 入口（输入批处理+漏扫；SUB SP,#0xA0，外部参考实现 on_touch_phase：0x100873A04）
+#define XRC_BRK_AP_SWALLOW_TOUCH_SITE_OFF (0x923EC8ULL) // sub_100921DC4 入口（触摸批→消费 mode0；SUB SP,#0x80，外部参考实现 on_touch_batch：0x100875AB8）
+#define XRC_BRK_AP_ARC_VISUAL_SITE_OFF   (0x91ED88ULL) // STRH WZR,[X0,#0x10]（场景 tick 弧清态，外部参考实现 on_arc_visual_clear：0x1008710B0）
+#define XRC_BRK_AP_LN_STATE_REPLAY_OFF     (0x146C0B0ULL)
+#define XRC_BRK_AP_LN_TICK_REPLAY_OFF      (0x146C0B8ULL)
+#define XRC_BRK_AP_NOTE_WIN_REPLAY_OFF     (0x146C0C0ULL)
+#define XRC_BRK_AP_ARCTAP_WIN_REPLAY_OFF   (0x146C0C8ULL)
+#define XRC_BRK_AP_SWALLOW_JUDGE_REPLAY_OFF (0x146C0D0ULL)
+#define XRC_BRK_AP_SWALLOW_BATCH_REPLAY_OFF (0x146C0D8ULL)
+#define XRC_BRK_AP_SWALLOW_TOUCH_REPLAY_OFF (0x146C0E0ULL)
+#define XRC_BRK_AP_ARC_VISUAL_REPLAY_OFF   (0x146C0E8ULL)
 // 诊断计数站点：引擎 tick 助手的返回点（MOV X26,X0 → 重放安全），
 // 用来量化"引擎自己发了多少 tick 判定"（对账物量/分数与原谱）。
-#define XRC_BRK_AP_TICKCNT1_SITE_OFF    (0x91DCBCULL) // helper1(sub_10091E878, Pure tick) 返回后：X0 = 本次 Pure tick 数
-#define XRC_BRK_AP_TICKCNT2_SITE_OFF    (0x91DDBCULL) // helper2(sub_10091E958, Lost tick) 返回后：X0 = 本次 Lost tick 数
-#define XRC_BRK_AP_TICKCNT1_REPLAY_OFF  (0x14680F0ULL)
-#define XRC_BRK_AP_TICKCNT2_REPLAY_OFF  (0x14680F8ULL)
+#define XRC_BRK_AP_TICKCNT1_SITE_OFF    (0x91FDC0ULL) // helper1(sub_10091E878, Pure tick) 返回后：X0 = 本次 Pure tick 数
+#define XRC_BRK_AP_TICKCNT2_SITE_OFF    (0x91FEC0ULL) // helper2(sub_10091E958, Lost tick) 返回后：X0 = 本次 Lost tick 数
+#define XRC_BRK_AP_TICKCNT1_REPLAY_OFF  (0x146C0F0ULL)
+#define XRC_BRK_AP_TICKCNT2_REPLAY_OFF  (0x146C0F8ULL)
 // 曲目锁态覆盖站点（取证 research/notes/xrc-packlock-rootcause-2026-09-19.md）：
 // 锁状态函数 sub_100919E5C 内的两个专属子分支，各自只有唯一调用方（锁态函数自身），
 // 入口直返 0x0101010101（b0..b4 = PST/PRS/FTR/BYD/INS 全解锁）即可对齐显示；开关 = unlockFv / unlockDo。
 //   · 0x991508 = FV 五曲 fast path（入口 STP X20,X19,[SP,#-0x20]!；重放安全）
 //   · 0xAAE50C = DO(konzetsu) 分支（入口 SUB SP,#0xD0；重放安全）
-#define XRC_BRK_LOCK_FV_SITE_OFF        (0x991508ULL)
-#define XRC_BRK_LOCK_FV_REPLAY_OFF      (0x1468100ULL)
-#define XRC_BRK_LOCK_DO_SITE_OFF        (0xAAE50CULL)
-#define XRC_BRK_LOCK_DO_REPLAY_OFF      (0x1468108ULL)
+#define XRC_BRK_LOCK_FV_SITE_OFF        (0x993668ULL)
+#define XRC_BRK_LOCK_FV_REPLAY_OFF      (0x146C100ULL)
+#define XRC_BRK_LOCK_DO_SITE_OFF        (0xAB0958ULL)
+#define XRC_BRK_LOCK_DO_REPLAY_OFF      (0x146C108ULL)
 // 终章链门覆盖：sub_10099156C 是 FV 五曲"锁标 + 开局门"的**共同上游**——
 //   锁态函数 sub_100991508 与可玩性谓词 sub_100919874（选曲 cell / Play 门）都调它；
 //   未推进终章链时返回 1 = 锁 → 既显示锁标也挡住 start。
 //   入口直返 **1（放行）**（极性：0 是锁）；开关 = gateOpen。入口指令 SUB SP,#0xC0，重放安全。
-#define XRC_BRK_FV_GATE_SITE_OFF        (0x99156CULL)
-#define XRC_BRK_FV_GATE_REPLAY_OFF      (0x1468110ULL)
+#define XRC_BRK_FV_GATE_SITE_OFF        (0x9936CCULL)
+#define XRC_BRK_FV_GATE_REPLAY_OFF      (0x146C110ULL)
 // 链进度覆盖（取证 research/notes/xrc-chain-regression-6.13-vs-7.0-2026-09-19.md）：
 //   7.0 的「链」系统：InitFunc_194 建 rank→曲名表（finale 五曲 / konzetsu 五曲+arghena），
 //   运行时把**硬编码名**拼成 "<名>|<难度>" 去 mgr+0x28 容器查节点对象；而对象是按 songlist 的
@@ -345,8 +347,8 @@
 //   入口直返 100（= 该函数自身"无场景对象"路径的合法进度值）→ 不查表（改名/挪包均安全），
 //   并令 sub_10099156C 的 v19=(98FB1C==0) 恒 0 = 可玩。**不设开关**（守崩，恒开）。
 //   入口指令 SUB SP,#0xB0（重放安全）；配对标记 "chain-guard v1"。
-#define XRC_BRK_CHAIN_PROG_SITE_OFF     (0x98FB1CULL)
-#define XRC_BRK_CHAIN_PROG_REPLAY_OFF   (0x1468118ULL)
+#define XRC_BRK_CHAIN_PROG_SITE_OFF     (0x991C7CULL)
+#define XRC_BRK_CHAIN_PROG_REPLAY_OFF   (0x146C118ULL)
 
 // ---------------- BRK 桩：全条件放行族（unlock_all / dl_ready；2026-10-12 取证）----------------
 // 出处: 本版原生二进制（samples/arcaea/7.0.255/ios/work/stage1/Arc-mobile，md5 49fbbba8…）
@@ -369,16 +371,16 @@
 //      仅旁路"UI/开局截流"；文件真实存在性仍由开局链亲自校验（缺文件 → 温和失败+重扫）。
 // 开关：unlock_all（①②③；默认关）、dl_ready（④；默认关，纪律见 xrc-download-stack-cocos §8）。
 // 另：锁绘分支族（四处，见下）随 unlock_all || unlock_do 联动（显示一致性）。
-#define XRC_BRK_LOCK_ALL_SITE_OFF      (0x919E5CULL)   // ① sub_100919E5C 入口
-#define XRC_BRK_LOCK_ALL_REPLAY_OFF    (0x1468138ULL)  // ⚠ 0x128/0x130 已被 cb_gate/cb_fetch 占用
-#define XRC_BRK_PLAY_GATE_SITE_OFF     (0x919874ULL)   // ② sub_100919874 入口
-#define XRC_BRK_PLAY_GATE_REPLAY_OFF   (0x1468140ULL)
-#define XRC_BRK_COND_UNLOCK_A_SITE_OFF (0xBDC5A8ULL)   // ③ sub_100BDC5A8 入口
-#define XRC_BRK_COND_UNLOCK_A_REPLAY_OFF (0x1468150ULL)
-#define XRC_BRK_COND_UNLOCK_B_SITE_OFF (0xBDC8D4ULL)   // ③ sub_100BDC8D4 入口
-#define XRC_BRK_COND_UNLOCK_B_REPLAY_OFF (0x1468158ULL)
-#define XRC_BRK_DL_PLAY_SITE_OFF       (0x850308ULL)   // ④ sub_100850308 入口
-#define XRC_BRK_DL_PLAY_REPLAY_OFF     (0x1468148ULL)
+#define XRC_BRK_LOCK_ALL_SITE_OFF      (0x91BF60ULL)   // ① sub_100919E5C 入口
+#define XRC_BRK_LOCK_ALL_REPLAY_OFF    (0x146C138ULL)  // ⚠ 0x128/0x130 已被 cb_gate/cb_fetch 占用
+#define XRC_BRK_PLAY_GATE_SITE_OFF     (0x91B978ULL)   // ② sub_100919874 入口
+#define XRC_BRK_PLAY_GATE_REPLAY_OFF   (0x146C140ULL)
+#define XRC_BRK_COND_UNLOCK_A_SITE_OFF (0xBDEFB8ULL)   // ③ sub_100BDC5A8 入口
+#define XRC_BRK_COND_UNLOCK_A_REPLAY_OFF (0x146C150ULL)
+#define XRC_BRK_COND_UNLOCK_B_SITE_OFF (0xBDF2E4ULL)   // ③ sub_100BDC8D4 入口
+#define XRC_BRK_COND_UNLOCK_B_REPLAY_OFF (0x146C158ULL)
+#define XRC_BRK_DL_PLAY_SITE_OFF       (0x85205CULL)   // ④ sub_100850308 入口
+#define XRC_BRK_DL_PLAY_REPLAY_OFF     (0x146C148ULL)
 // arghena 专属锁绘旁路：sub_10084EE7C 内 0x84EF48 的 `TBNZ X0,#0x20`（X0 = sub_100919E5C
 //   返回值，bit32 = b4/INS）。置位 → 落 0x84F05C → 调 sub_10084F0E8 →（包==konzetsu）
 //   `img/jacket_locked_konzetsu.jpg`。⚠ 该位与"五难度全解"共用（unlockDo/unlockAll 置 b4=1
@@ -394,25 +396,25 @@
 //   · ④0xB3F274（详情面板）`TBZ X24,#0x20`→0xB3F2A4（跳过 84F0E8 = 保留 84EE7C 普通结果，
 //     0xB3F250 已先写好普通曲绘；置位则 84F0E8 结果覆写）→ 本族唯一"置位落锁绘"的 TBZ 形态。
 //   OFF 时四处均按位复现（逐字节同原行为）；ON 时恒走普通曲绘侧。
-#define XRC_BRK_JACKET_LOCK_SITE_OFF   (0x84EF48ULL)
-#define XRC_BRK_JACKET_LOCK_TARGET_OFF (0x84F05CULL)   // 原 TBNZ 跳转目标（同函数内）
-#define XRC_BRK_JACKET_CELL_SITE_OFF   (0x8EAFB4ULL)
-#define XRC_BRK_JACKET_CELL_TARGET_OFF (0x8EAFDCULL)
-#define XRC_BRK_JACKET_INFO_SITE_OFF   (0x94A57CULL)
-#define XRC_BRK_JACKET_INFO_TARGET_OFF (0x94A59CULL)
-#define XRC_BRK_JACKET_PANEL_SITE_OFF  (0xB3F274ULL)
-#define XRC_BRK_JACKET_PANEL_TARGET_OFF (0xB3F2A4ULL)
+#define XRC_BRK_JACKET_LOCK_SITE_OFF   (0x850C9CULL)
+#define XRC_BRK_JACKET_LOCK_TARGET_OFF (0x850DB0ULL)   // 原 TBNZ 跳转目标（同函数内）
+#define XRC_BRK_JACKET_CELL_SITE_OFF   (0x8ECD38ULL)
+#define XRC_BRK_JACKET_CELL_TARGET_OFF (0x8ECD60ULL)
+#define XRC_BRK_JACKET_INFO_SITE_OFF   (0x94C680ULL)
+#define XRC_BRK_JACKET_INFO_TARGET_OFF (0x94C6A0ULL)
+#define XRC_BRK_JACKET_PANEL_SITE_OFF  (0xB41A18ULL)
+#define XRC_BRK_JACKET_PANEL_TARGET_OFF (0xB41A48ULL)
 
 // ---------------- 弧/绘制观测桩（只观测；站点语义见 XRCHook.m）----------------
 // 三处都打在**入口 +4**（第二条指令），入口的 SUB SP 照常执行 ⇒ SP 自然正确；
 // replay=0：handler 只需 PC=site+4（B 够不到 0x101468xxx）。见 XRCHook.m s_arcr_entry_exit。
 // 绘制趟入口：X0 = TrackLayer，X1 = *(track+0x288) = 音符表 {begin,end}（0x100b23584 / 0x100b236b4）
 // 弧 tick / 头过线入口：X0 = 该弧渲染对象（logic = *(X0+0x268)）
-#define XRC_BRK_RPF_DRAW_SITE_OFF      0xB23668ULL     // 入口+4：第二条 STP（VA 0x100B23668）
+#define XRC_BRK_RPF_DRAW_SITE_OFF      0xB25E0CULL     // 入口+4：第二条 STP（VA 0x100B23668）
 #define XRC_BRK_RPF_DRAW_REPLAY_OFF    0ULL
-#define XRC_BRK_RPF_ARCTICK_SITE_OFF   0xAFFC14ULL     // 入口+4（VA 0x100AFFC14）
+#define XRC_BRK_RPF_ARCTICK_SITE_OFF   0xB0233CULL     // 入口+4（VA 0x100AFFC14）
 #define XRC_BRK_RPF_ARCTICK_REPLAY_OFF 0ULL
-#define XRC_BRK_RPF_ARCPASS_SITE_OFF   0xAFFA94ULL     // 入口+4（VA 0x100AFFA94）
+#define XRC_BRK_RPF_ARCPASS_SITE_OFF   0xB021BCULL     // 入口+4（VA 0x100AFFA94）
 #define XRC_BRK_RPF_ARCPASS_REPLAY_OFF 0ULL
 // ---- 弧分段「藏」的两处 ----
 // 症状：弧带下端被整齐切掉 = 弧的**开头**不显示（起手点不可见）。
@@ -423,9 +425,9 @@
 //   不调游戏函数、不需要跳板（B 的 ±128MB 也够不到我们的 __TEXT 空页）。
 // 行为：handler 平时**一个字都不改**（⇒ 与未打桩逐字节同行为），仅在插件置位的
 //   「回跳窗口」内把 W1 改成 1 ⇒ 引擎自己把分段显回来。窗口 = 回跳起 → 播放头涨回旧水位 P。
-#define XRC_BRK_ARC_HIDE_A_SITE_OFF    0xAFFB60ULL     // MOV W1,#0（VA 0x100AFFB60）
+#define XRC_BRK_ARC_HIDE_A_SITE_OFF    0xB02288ULL     // MOV W1,#0（VA 0x100AFFB60）
 #define XRC_BRK_ARC_HIDE_A_REPLAY_OFF  0ULL
-#define XRC_BRK_ARC_HIDE_B_SITE_OFF    0xAFFE80ULL     // MOV W1,#0（VA 0x100AFFE80）
+#define XRC_BRK_ARC_HIDE_B_SITE_OFF    0xB025A8ULL     // MOV W1,#0（VA 0x100AFFE80）
 #define XRC_BRK_ARC_HIDE_B_REPLAY_OFF  0ULL
 // ⚠ 站点值一律是**文件偏移**，不是完整 VA：分发处是 `pc == mb + site_off`（XRCHook.m s_sigtrap）。
 //   写成 VA 的后果：分发永不匹配 ⇒ BRK 落进无处理器路径 ⇒ 开歌 SIGTRAP 秒崩；自检读越界 ⇒ brk_sites 少 3。
@@ -435,19 +437,19 @@
 #define XRC_NOTE_LNSTATE_OFF        100           // note+0x64 = longTouchState 首字节（6.x 0x5C 漂移 +8）
 #define XRC_LN_VOID_OFF             164           // note+0xA4 = 弧 isVoid（弧 vtable[11]=sub_100187C78 读的字段；
                                                   // 6.x 0x9C 漂移 +8，与 Android 7.0 一致）
-#define XRC_LN_VPTR_ARC             0x149C020ULL  // _ZTV12LogicArcNote + 16（对象 vptr）
-#define XRC_LN_VPTR_HOLD            0x14B7980ULL  // _ZTV13LogicHoldNote + 16
-#define XRC_AP_NOTE_WIN_CONT_OFF    (0x91DD44ULL) // 窗口强判后的原版汇合点（W19=0;W26=1 → 弧态更新+子扫描）
-#define XRC_AP_ARCTAP_WIN_CONT_OFF  (0x91DD44ULL) // 弧子音符强判后同一汇合点（对齐 外部参考实现：其 success 走 0x100872180
+#define XRC_LN_VPTR_ARC             0x14A03A0ULL  // _ZTV12LogicArcNote + 16（对象 vptr）
+#define XRC_LN_VPTR_HOLD            0x14BBD00ULL  // _ZTV13LogicHoldNote + 16
+#define XRC_AP_NOTE_WIN_CONT_OFF    (0x91FE48ULL) // 窗口强判后的原版汇合点（W19=0;W26=1 → 弧态更新+子扫描）
+#define XRC_AP_ARCTAP_WIN_CONT_OFF  (0x91FE48ULL) // 弧子音符强判后同一汇合点（对齐 外部参考实现：其 success 走 0x100872180
                                                   // → 7.0 0x91DD20 的等价落点；跳 0x91DF5C 会丢弧"被触"视觉）
 // ---- 引擎自身的"被触"标记函数 ----
-#define XRC_OFF_FN_MARK_HOLD   (0x8E4864ULL)   // 长条被触：事件派发(sub_100B69644 ev=2, note 时刻) + note+0x64 字 = 0x0101
+#define XRC_OFF_FN_MARK_HOLD   (0x8E65E8ULL)   // 长条被触：事件派发(sub_100B69644 ev=2, note 时刻) + note+0x64 字 = 0x0101
                                                // （= 引擎真触路径用的函数；x1 由 hold vtable 槽直接引用）
-#define XRC_OFF_FN_ARC_SPRITE  (0x187618ULL)   // 弧"子对象/sprite"getter：sub_100187618(note)（8B，LDR+RET）
+#define XRC_OFF_FN_ARC_SPRITE  (0x18936CULL)   // 弧"子对象/sprite"getter：sub_100187618(note)（8B，LDR+RET）
                                                // 引擎在弧清态/置触处均用它取目标后写 +0x10/+0x12/+0x14
 // 弧/长条"被接住"语义。出处 = 外部参考实现 handler 转储（离线样本）+ 两侧 vtable 槽位对齐
 // （hold/arc vtable[12] = sub_1008E4864 / sub_100187620；外部参考实现 0x10084A2D8 / 0x1001264A4）。
-#define XRC_OFF_FN_ARC_CONSUME (0x187620ULL)   // 弧被触消费（弧 vtable[12]）：按弧上最近段时刻算 sprite+0x14
+#define XRC_OFF_FN_ARC_CONSUME (0x189374ULL)   // 弧被触消费（弧 vtable[12]）：按弧上最近段时刻算 sprite+0x14
                                                // 到期值、置 note+0x64 字、派发事件(ev=0)、调弧对象 vtable 刷新；
                                                // 第 2 参 = 0x40B 事件结构（仅 +0x34 被读；-1 = 无手指哨兵）
 #define XRC_NOTE_HOLD_POS_OFF  (48)            // note+0x30 = hold 位置/时刻对（slot3 重置方法写它；
@@ -494,7 +496,7 @@
 //   累加器候选: dump 实测 +0xf0=250 / +0xf8,+0x100,+0x108 = ptr,ptr,30，
 //         (end-begin)/24 = 24 → 疑似 std::vector<std::string>（元素 24B），
 //         capacity 30 ≥ size 24。语义待 XRCOMLog 探针实测确认。
-#define XRC_OM_VTABLE_OFF           (0x149C110ULL)  // vtable 地址点（vptr 值）
+#define XRC_OM_VTABLE_OFF           (0x14A0490ULL)  // vtable 地址点（vptr 值）
 #define XRC_OM_APPLOG_SLOT          (72)            // applog 发送（虚槽）
 #define XRC_OM_OFF_ACC_COUNT        (0xf0)          // 疑似累计计数
 #define XRC_OM_OFF_VEC_BEGIN        (0xf8)          // 疑似 vector<string> begin

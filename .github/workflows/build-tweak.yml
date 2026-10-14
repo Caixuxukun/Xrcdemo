@@ -7,7 +7,7 @@ on:
       build_mode:
         description: "构建模式：dev（开发构建，默认）或 release（发布构建）"
         required: false
-        default: "dev"
+        default: "release"
 
 jobs:
   build:
@@ -20,7 +20,7 @@ jobs:
       DYLIB_OUT: libxrcdemo.dylib
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 1G
-      XRC_MODE: ${{ github.event.inputs.build_mode || 'dev' }}
+      XRC_MODE: ${{ github.event.inputs.build_mode || 'release' }}
 
     steps:
       - name: Checkout
@@ -122,6 +122,18 @@ jobs:
           install_name_tool -id @rpath/libellekit.dylib ../out/libellekit.dylib
           ldid -S ../out/libellekit.dylib
 
+      - name: Verify relocated profile marker
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          marker = b"xrc-profile-7.0.256-ffa7ad7b-static-v1"
+          binary = Path("out/libxrcdemo.dylib").read_bytes()
+          if marker not in binary:
+              raise SystemExit("Build lacks 7.0.256 profile marker; refusing artifact upload")
+          print("Verified 7.0.256 profile marker")
+          PY
+          shasum -a 256 out/libxrcdemo.dylib out/libellekit.dylib > out/SHA256SUMS.txt
+
       - name: Upload dylibs
         uses: actions/upload-artifact@v4
         with:
@@ -129,4 +141,5 @@ jobs:
           path: |
             out/libxrcdemo.dylib
             out/libellekit.dylib
+            out/SHA256SUMS.txt
           if-no-files-found: error

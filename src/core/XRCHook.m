@@ -1012,7 +1012,7 @@ typedef struct {
 } xrc_static_patch_t;
 
 static const xrc_static_patch_t k_static_patches[] = {
-    { "dl_state_ready_merged", 0x844774, "ff4302d1fa6704a9", "00008052c0035fd6",
+    { "dl_state_ready_merged", 0x8464C8, "ff4302d1fa6704a9", "00008052c0035fd6",
       "下载态总查询恒返就绪：全 App 下载/更新提示消失，接线上服务器时=曲目下载全失败" },
 };
 
@@ -1109,6 +1109,7 @@ void xrc_brk_static_report(uint64_t base) {
 }
 
 void xrc_brk_setup(uint64_t image_base) {
+    xrc_logi(XRCLC_BOOT, @"xrc-profile-7.0.256-ffa7ad7b-static-v1");
     xrc_brk_install();
     if (!image_base) { xrc_logw(XRCLC_BOOT, @"[brk] no image base, skipping registration"); return; }
     for (size_t i = 0; i < sizeof(k_brk_entries) / sizeof(k_brk_entries[0]); i++) {

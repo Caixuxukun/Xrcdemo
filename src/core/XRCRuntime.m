@@ -1,6 +1,6 @@
 // © 雾月星辰 & MLXC · github@XingChenRS
 // XRCRuntime.m — 运行时锚点发现。
-// 机制：注入器在 __DATA 零填充区写 xrc_info blob（magic XRC1）。
+// 机制：注入器在 __XRC 零填充区写 xrc_info blob（magic XRC1）。
 // dyld 不 rebase 零填充区（不在 rebase 列表），blob 里的静态偏移原样保留；
 // dylib 用 image_base 手动重定位。容错：编译期 profile 偏移 fallback。
 
@@ -14,10 +14,10 @@
 
 xrc_runtime_t g_xrc = {0};
 
-// 读主程序 __DATA 段的运行时 vm 范围（扫描边界，防止读到 perm=0 页）。
+// 读主程序 __XRC 段的运行时 vm 范围（扫描边界，防止读到 perm=0 页）。
 // 注意：dyld 不改内存里的 load commands——segment vmaddr 仍是未 slide 的
 // 静态值，必须手动加 (base - 静态基址 0x100000000)。
-static bool s_data_segment_range(uint64_t image_base, uint64_t *start, uint64_t *end) {
+static bool s_xrc_segment_range(uint64_t image_base, uint64_t *start, uint64_t *end) {
     const struct mach_header_64 *hdr = (const struct mach_header_64 *)image_base;
     if (hdr->magic != MH_MAGIC_64) return false;
     const uint64_t slide = image_base - 0x100000000ULL;
@@ -25,7 +25,7 @@ static bool s_data_segment_range(uint64_t image_base, uint64_t *start, uint64_t 
     for (uint32_t i = 0; i < hdr->ncmds; i++) {
         if (lc->cmd == LC_SEGMENT_64) {
             const struct segment_command_64 *seg = (const struct segment_command_64 *)lc;
-            if (strcmp(seg->segname, "__DATA") == 0) {
+            if (strcmp(seg->segname, "__XRC") == 0) {
                 *start = seg->vmaddr + slide;
                 *end = seg->vmaddr + slide + seg->vmsize;
                 return true;
@@ -54,8 +54,8 @@ xrc_runtime_t xrc_runtime_discover(void) {
     if (!base) return r;
 
     uint64_t data_start = 0, data_end = 0;
-    if (!s_data_segment_range(base, &data_start, &data_end)) {
-        xrc_logd(XRCLC_BOOT, @"runtime discover: __DATA segment not found");
+    if (!s_xrc_segment_range(base, &data_start, &data_end)) {
+        xrc_logd(XRCLC_BOOT, @"runtime discover: __XRC segment not found");
         return r;
     }
 
@@ -63,7 +63,7 @@ xrc_runtime_t xrc_runtime_discover(void) {
     xrc_logd(XRCLC_BOOT, @"runtime discover: base=%llx DATA=[%llx,%llx) expect=%llx",
              base, data_start, data_end, base + XRC_INFO_OFF);
 
-    // 扫描范围限定 __DATA 段内（预期位置前后截断到段边界）
+    // 扫描范围限定 __XRC 段内（预期位置前后截断到段边界）
     uint64_t expect = base + XRC_INFO_OFF;
     uint64_t scan_start = expect > data_start + (1u << 20) ? expect - (1u << 20) : data_start;
     uint64_t scan_end   = expect + (1u << 20);

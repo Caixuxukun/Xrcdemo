@@ -1,22 +1,11 @@
 # © 雾月星辰 & MLXC · github@XingChenRS
 """
-Inject libxrcdemo.dylib + libellekit.dylib into Arc-mobile.app.
-
-Two independent stages:
-
-1. dylib injection (default): copy dylibs, insert LC_LOAD_DYLIB / LC_RPATH
-   into the existing load-command padding.
-2. judge stub (--stub): patch the judge entry (sub_10091E684) -> trampoline in
-   __TEXT tail zero-padding -> slot in __DATA tail zero-padding. No Mach-O header
-   surgery; both regions lie inside the existing segment filesizes. Re-sign
-   afterwards (the user signs the result).
-
-Stub facts (Arcaea iOS 7.0.255):
-  entry      vm 0x10091E684  (fileoff 0x91E684)   ← 判定核（注意与特效显示链 sub_1009D9ED8 区分）
-  trampoline vm 0x10146800C  (fileoff 0x146800C, __TEXT tail zero-run 0x146800a..0x146c000)
-  slot       vm 0x10164AB28  (fileoff 0x164AB28, __DATA tail zero-run 0x164ab25..0x164c000)
-  distance entry->tramp = 177MB > B range -> ADRP+ADD+BR absolute (12 bytes,
-  replays first 3 insns of the entry prologue).
+Arcaea 7.0.256 build 1209864 static relocation candidate.
+See RELOCATION_7.0.256.md for evidence and untested runtime limitations.
+Inject dylibs and patch verified arm64 sites. Judge/BRK trampolines use verified
+__TEXT padding; slot/info use a new __XRC RW segment before relocated LINKEDIT.
+VM offsets and file offsets differ for __XRC. Re-sign after modification.
+The original IPA supplied for analysis was never modified.
 """
 import os
 import sys as _sys
@@ -35,21 +24,21 @@ FW_DIR = os.path.join(APP, "Frameworks")
 DYLIB_NAMES = ["libxrcdemo.dylib", "libellekit.dylib"]
 INJECT_NAME = "@rpath/libxrcdemo.dylib"
 
-LC_LOAD_DYLIB = 0x8000000C
+LC_LOAD_DYLIB = 0x0C  # Mach-O LC_LOAD_DYLIB; LC_REQ_DYLD is not valid here
 LC_RPATH = 0x8000001C
 
-# ---- judge stub constants (7.0.255) ----
+# ---- judge stub constants (7.0.256; historical comments below) ----
 # 判定核心 = sub_10091E684（整数 CMP 级联；与 6.13 sub_100870FD0 入口及 CMP
 # 站点字节级同构——跨版本可直接按字节指纹重定位，见 README §6）。
 # 判别：sub_1009D9ED8 是特效显示链，与判定核易混。
-STUB_ENTRY_VA   = 0x10091E684
-STUB_ENTRY_FILE = 0x91E684
-STUB_TRAMP_VA   = 0x10146800C
-STUB_TRAMP_FILE = 0x146800C
-STUB_SLOT_VA    = 0x10164AB28
-STUB_SLOT_FILE  = 0x164AB28
-STUB_INFO_VA    = 0x10164AB40   # slot 之后 24B 处
-STUB_INFO_FILE  = 0x164AB40
+STUB_ENTRY_VA   = 0x100920788
+STUB_ENTRY_FILE = 0x920788
+STUB_TRAMP_VA   = 0x10146C00C
+STUB_TRAMP_FILE = 0x146C00C
+STUB_SLOT_VA    = 0x1016a8000
+STUB_SLOT_FILE  = 0x1650000
+STUB_INFO_VA    = 0x1016a8018   # slot 之后 24B 处
+STUB_INFO_FILE  = 0x1650018
 # expected first 3 insns at entry (file byte order; IDA dwords
 # a9bc5ff8=a90157f6=a9024ff4 as STP X24,X23 / STP X22,X21 / STP X20,X19):
 STUB_ENTRY_EXPECT = bytes.fromhex("f85fbca9f65701a9f44f02a9")
@@ -66,73 +55,73 @@ BRK_INSN = struct.pack("<I", 0xD4200000)
 # replay 区分配：judge 跳板 0x146800C..0x1468034；BRK 重放自 0x1468040 起，8B/桩。
 # expect 非 None 时做"原字节断言"（防版本漂移；已打桩的二进制跳过断言）。
 BRK_HOOKS = [
-    ("applog_send", 0x100623AEC, 0x101468040, None),   # sub_100623AEC 入口（OnlineManager 槽 72）
+    ("applog_send", 0x1006257DC, 0x10146C040, "eb2bb86d"),   # sub_100623AEC 入口（OnlineManager 槽 72）
     # log_blob 组装处（密文出口）：待发送的 std::string 在 sp+0x290。
     # 站点指令 0x1006399E4（add x0,sp,#var_428）为 SP 相对寻址——重放安全；
     # PC 相对指令（ADR/ADRL/B/CBZ 等）不能在重放跳板执行（会在别处算错目标）。
-    ("applog_blob", 0x1006399E4, 0x101468050, None),
+    ("applog_blob", 0x10063B6D4, 0x10146C050, "e0a30791"),
     # ---- 拥有/解锁链（功能账 §1.1）----
     # 歌曲归属由 cb 的 songlist/packlist/unlocks 三张清单 + 服务器 /user/me 授予共同决定；
     # 本组覆盖"服务器未授予、但本地已有内容"的场景（--features unlock_own 启用）。
     # 层1 取第 2 条指令：LDR X9,[X0,#0x268] 为寄存器相对寻址（重放安全）；
     # 首条 CBZ X1 是 PC 相对条件分支，不可进重放跳板。
-    ("unlock_l1",  0x100BE46AC, 0x101468058, "093441f9"),  # 层1 sub_100BE46A8 +4（拥有表线性扫描）
-    ("unlock_l2",  0x100BE46EC, 0x101468060, "ff0302d1"),  # 层2 sub_100BE46EC 入口（SUB SP,#0x80）
-    ("unlock_l3",  0x100BE4D38, 0x101468068, "fd7bbfa9"),  # 层3 sub_100BE4D38 入口（STP X29,X30,[SP,#-0x10]!）
+    ("unlock_l1",  0x100BE70BC, 0x10146C058, "09c441f9"),  # 层1 sub_100BE46A8 +4（拥有表线性扫描）
+    ("unlock_l2",  0x100BE70FC, 0x10146C060, "ff0302d1"),  # 层2 sub_100BE46EC 入口（SUB SP,#0x80）
+    ("unlock_l3",  0x100BE7748, 0x10146C068, "fd7bbfa9"),  # 层3 sub_100BE4D38 入口（STP X29,X30,[SP,#-0x10]!）
     # ---- cb 验证链（功能账 §3）----
-    ("cb_ready",    0x100F43274, 0x101468078, "00a04039"),  # 就绪位 getter（LDRB W0,[X0,#0x28];RET）
+    ("cb_ready",    0x100F463D4, 0x10146C078, "00a04039"),  # 就绪位 getter（LDRB W0,[X0,#0x28];RET）
     # cb 自由化：让校验结论恒为通过，并保持成功路径完整：
     #   ① 逐文件 sha256 比较的 B.NE → 恒不跳（视为相等）
     #   ② 三清单 HMAC 比较的 B.NE → 恒不跳（成功块照常写 valid=1 并回填版本串）
     #   ③ 清树函数入口 → 直接返回（cb/meta*.cb 与 cb/active 整树不因校验失败被删）
     #   ⚠ ① ② 是 PC 相对条件分支，**不能进重放跳板**（会在别处算错目标）；handler 内按 NZCV
     #     自行复现分支，故 replay=0（no-replay）。
-    ("cb_filehash", 0x100F44F9C, None, "21110054"),  # B.NE loc_100F451C0（逐文件 32B sha256 比较）
-    ("cb_listhash", 0x100F450B0, None, "21090054"),  # B.NE loc_100F451D4（三表 HMAC 比较）
-    ("cb_wipe",     0x100F43C08, 0x101468120, "ffc301d1"),  # 清树入口（SUB SP,#0x70）
-    ("cb_dispatch", 0x10013C5E8, 0x101468088, "ff0304d1"),  # 更新错码分发入口（SUB SP,#0x100）
+    ("cb_filehash", 0x100F480FC, None, "21110054"),  # B.NE loc_100F451C0（逐文件 32B sha256 比较）
+    ("cb_listhash", 0x100F48210, None, "21090054"),  # B.NE loc_100F451D4（三表 HMAC 比较）
+    ("cb_wipe",     0x100F46D68, 0x10146C120, "ffc301d1"),  # 清树入口（SUB SP,#0x70）
+    ("cb_dispatch", 0x10013E2A4, 0x10146C088, "ff0304d1"),  # 更新错码分发入口（SUB SP,#0x100）
     # ---- cb 版本/更新链（无 meta.cb 情形；2026-10-12 补；语义/证据链见 XRCProfile.h 同名块）----
     # ① 内容更新强制门 sub_1001963D8（OnlineManager::tryHandleContentBundleOldError）：
     #    服务端 code 11（内容包过旧）→「A new content update is required...returning to title」
     #    + 换场回标题；68 个调用者 = HTTP 端点响应处理器家族（0x1007FA490-0x100819C78）。
     #    开关开 → x0=0 直返（镜像其"已在标题/转场场景"的合法早退：不弹窗不换场）；关 → 重放原序言。
-    ("cb_gate",     0x1001963D8, 0x101468128, "ffc303d1"),  # 更新强制门入口（SUB SP,#0xF0）
+    ("cb_gate",     0x1001980C8, 0x10146C128, "ffc303d1"),  # 更新强制门入口（SUB SP,#0xF0）
     # ② 内容包更新指令处理器 sub_100815498（+0xA0 处引响应字段 orderedResults）：
     #    入口直返 = 忽略服务器更新指令（设备内容即真值）；函数身份 [高]、内部动作 [中]（见
     #    XRCProfile.h），桩只做入口直返。出处 research/notes/xrc-plugin-site-semantics-2026-09-19.md
     #    §3.1。离线不可达（无响应）。
-    ("cb_fetch",    0x100815498, 0x101468130, "ffc306d1"),  # 内容包响应处理器入口（SUB SP,#0x1B0）
+    ("cb_fetch",    0x1008171B8, 0x10146C130, "ffc306d1"),  # 内容包响应处理器入口（SUB SP,#0x1B0）
     # ---- 自动演奏（外部参考实现对齐；功能账 §5.2）----
     # 站点语义/handler 见 XRCProfile.h + XRCHook.m；开关 xrc_judge_set_autoplay（默认关）。
     # 关时各站重放原指令，行为与未注入一致；开启后长条走原版 Pure tick、窗口点强判、
     # 三输入入口吞触摸。配对标记 "autoplay-eve v1"（dylib 侧必须存在，见配对校验）。
-    ("ap_ln_state",      0x10091DBC8, 0x1014680B0, "08904139"),  # LDRB W8,[X0,#0x64]（长条触摸态读取点）
-    ("ap_ln_tick",       0x10091DC48, 0x1014680B8, "680340f9"),  # LDR X8,[X27]（长条判定派发前 vtable 装载）
-    ("ap_note_win",      0x10091DD70, 0x1014680C0, "5f00086b"),  # CMP W2,W8（窗口 = note+0x1C+0xC8）
-    ("ap_arctap_win",    0x10091DF34, 0x1014680C8, "5f00086b"),  # CMP W2,W8（窗口 = note+0x1C+0x64，弧子音符）
-    ("ap_swallow_judge", 0x10091EBC8, 0x1014680D0, "ffc305d1"),  # SUB SP,#0x170（逐触消费 sub_10091EBC8 入口）
-    ("ap_swallow_batch", 0x10091F688, 0x1014680D8, "ff8302d1"),  # SUB SP,#0xA0（输入批处理 sub_10091F688 入口）
-    ("ap_swallow_touch", 0x100921DC4, 0x1014680E0, "ff0302d1"),  # SUB SP,#0x80（触摸批 sub_100921DC4 入口）
-    ("ap_arc_visual",    0x10091CC84, 0x1014680E8, "1f200079"),  # STRH WZR,[X0,#0x10]（场景 tick 弧清态点）
+    ("ap_ln_state",      0x10091FCCC, 0x10146C0B0, "08904139"),  # LDRB W8,[X0,#0x64]（长条触摸态读取点）
+    ("ap_ln_tick",       0x10091FD4C, 0x10146C0B8, "680340f9"),  # LDR X8,[X27]（长条判定派发前 vtable 装载）
+    ("ap_note_win",      0x10091FE74, 0x10146C0C0, "5f00086b"),  # CMP W2,W8（窗口 = note+0x1C+0xC8）
+    ("ap_arctap_win",    0x100920038, 0x10146C0C8, "5f00086b"),  # CMP W2,W8（窗口 = note+0x1C+0x64，弧子音符）
+    ("ap_swallow_judge", 0x100920CCC, 0x10146C0D0, "ffc305d1"),  # SUB SP,#0x170（逐触消费 sub_10091EBC8 入口）
+    ("ap_swallow_batch", 0x10092178C, 0x10146C0D8, "ff8302d1"),  # SUB SP,#0xA0（输入批处理 sub_10091F688 入口）
+    ("ap_swallow_touch", 0x100923EC8, 0x10146C0E0, "ff0302d1"),  # SUB SP,#0x80（触摸批 sub_100921DC4 入口）
+    ("ap_arc_visual",    0x10091ED88, 0x10146C0E8, "1f200079"),  # STRH WZR,[X0,#0x10]（场景 tick 弧清态点）
     # 诊断计数：引擎两个 tick 助手的返回点（MOV X26,X0；重放安全），
     # 量化"引擎自己发了多少 tick 判定"（对账物量/分数 vs 原谱）。
-    ("ap_tickcnt1",      0x10091DCBC, 0x1014680F0, "fa0300aa"),  # MOV X26,X0（helper1=sub_10091E878 返回后，Pure tick 数）
-    ("ap_tickcnt2",      0x10091DDBC, 0x1014680F8, "fa0300aa"),  # MOV X26,X0（helper2=sub_10091E958 返回后，Lost tick 数）
+    ("ap_tickcnt1",      0x10091FDC0, 0x10146C0F0, "fa0300aa"),  # MOV X26,X0（helper1=sub_10091E878 返回后，Pure tick 数）
+    ("ap_tickcnt2",      0x10091FEC0, 0x10146C0F8, "fa0300aa"),  # MOV X26,X0（helper2=sub_10091E958 返回后，Lost tick 数）
     # ---- 曲目锁态覆盖（取证 research/notes/xrc-packlock-rootcause-2026-09-19.md）----
     # 锁状态函数 sub_100919E5C 的两个专属子分支（各自唯一调用方=锁态函数自身）：
     #   FV 五曲 fast path / DO(konzetsu) 分支。入口直返 0x0101010101（五难度类全解锁）；
     #   开关 unlockFv / unlockDo 关时重放原指令走原路径。两处入口指令均 SP 相对、重放安全。
-    ("lock_fv",          0x100991508, 0x101468100, "f44fbea9"),  # STP X20,X19,[SP,#-0x20]!（FV 五曲 fast path 入口）
-    ("lock_do",          0x100AAE50C, 0x101468108, "ff4303d1"),  # SUB SP,#0xD0（DO/konzetsu 分支入口）
+    ("lock_fv",          0x100993668, 0x10146C100, "f44fbea9"),  # STP X20,X19,[SP,#-0x20]!（FV 五曲 fast path 入口）
+    ("lock_do",          0x100AB0958, 0x10146C108, "ff4303d1"),  # SUB SP,#0xD0（DO/konzetsu 分支入口）
     # 终章链门（FV 五曲"锁标 + 开局门"的共同上游：锁态 sub_100991508 与可玩性谓词
     #   sub_100919874 都调它）→ 入口直返 1 = **放行**（注意语义：0 是"锁"）；
     #   开关 gateOpen，关时重放。
-    ("fv_gate",          0x10099156C, 0x101468110, "ff0303d1"),  # SUB SP,#0xC0（终章链门入口）
+    ("fv_gate",          0x1009936CC, 0x10146C110, "ff0303d1"),  # SUB SP,#0xC0（终章链门入口）
     # 链进度覆盖（7.0「链」系统的查表点；取证 xrc-chain-regression-6.13-vs-7.0-2026-09-19.md）：
     #   sub_10098FB1C 把硬编码曲名（InitFunc_194 表）拼 "<名>|<难度>" 查节点对象；对象按 songlist 的
     #   id 注册 → 改名/挪包即 NULL → 不判空 → 读 [NULL+0x28] 崩。入口直返 100（无对象进度值）。
     #   **不设开关、恒生效**（守崩桩）；dylib 侧配对标记 "chain-guard v1"。
-    ("chain_prog",       0x10098FB1C, 0x101468118, "ffc302d1"),  # SUB SP,#0xB0（链进度 sub_10098FB1C 入口）
+    ("chain_prog",       0x100991C7C, 0x10146C118, "ffc302d1"),  # SUB SP,#0xB0（链进度 sub_10098FB1C 入口）
     # ---- 全条件放行（unlock_all / dl_ready；2026-10-12；站点/证据链见 XRCProfile.h 同名块）----
     # 目标：本地存在合法谱面（难度已声明 song+0x250[idx]）时，任何"条件"不得阻止可见/可玩。
     #   ① lock_all   = 锁态总源 sub_100919E5C（44 调用点：cell/曲绘/横幅/世界/包页）→ 0x0101010101
@@ -143,27 +132,27 @@ BRK_HOOKS = [
     #   ⑤ jacket_lock = sub_10084EE7C 内 0x84EF48 `TBNZ X0,#0x20`（arghena 专属锁绘分支；
     #      与 unlockDo/unlockAll 的 b4=1 联动）。**no-replay**（PC 相对条件分支，handler 按位复现）。
     #   配对标记 "unlock-policy v1"（dylib 侧须存在，缺则拒配——见 main() 的配对校验）。
-    ("lock_all",         0x100919E5C, 0x101468138, "ffc302d1"),  # SUB SP,#0xB0（锁态总源入口）
-    ("play_gate",        0x100919874, 0x101468140, "ff8301d1"),  # SUB SP,#0x60（可玩性总源入口）
-    ("dl_play",          0x100850308, 0x101468148, "f657bda9"),  # STP X22,X21,[SP,#-0x30]!（需动作谓词入口）
-    ("cond_unlock_a",    0x100BDC5A8, 0x101468150, "ff4302d1"),  # SUB SP,#0x90（难度条件求值 A）
-    ("cond_unlock_b",    0x100BDC8D4, 0x101468158, "ff8301d1"),  # SUB SP,#0x60（难度条件求值 B）
+    ("lock_all",         0x10091BF60, 0x10146C138, "ffc302d1"),  # SUB SP,#0xB0（锁态总源入口）
+    ("play_gate",        0x10091B978, 0x10146C140, "ff8301d1"),  # SUB SP,#0x60（可玩性总源入口）
+    ("dl_play",          0x10085205C, 0x10146C148, "f657bda9"),  # STP X22,X21,[SP,#-0x30]!（需动作谓词入口）
+    ("cond_unlock_a",    0x100BDEFB8, 0x10146C150, "ff4302d1"),  # SUB SP,#0x90（难度条件求值 A）
+    ("cond_unlock_b",    0x100BDF2E4, 0x10146C158, "ff8301d1"),  # SUB SP,#0x60（难度条件求值 B）
     # 锁绘分支族（四处，no-replay：PC 相对条件分支，handler 按位复现；开关 = unlockAll || unlockDo）。
     # 触发器 = 锁态 bit32（b4）；置位 → sub_10084F0E8 锁绘选择器（konzetsu/finale/grievouslady/
     # tempestissimo/undyingmacula → jacket_locked_*，其余 → img/1080/jacket_locked_generic.jpg）。
     # 开关开时恒走普通曲绘侧。站点/目标均取自原生二进制反汇编（XRCProfile.h 同名块有全链证据）。
-    ("jacket_lock",      0x10084EF48, None,        "a00800b7"),  # TBNZ X0,#0x20（84EE7C 内 arghena 门；目标 0x84F05C）
-    ("jacket_cell",      0x1008EAFB4, None,        "480100b7"),  # TBNZ X8,#0x20（选曲 cell；目标 0x8EAFDC）
-    ("jacket_info",      0x10094A57C, None,        "000100b7"),  # TBNZ X0,#0x20（曲目信息面板；目标 0x94A59C）
-    ("jacket_panel",     0x100B3F274, None,        "980100b6"),  # TBZ  X24,#0x20（详情面板；目标 0xB3F2A4=跳过锁绘）
+    ("jacket_lock",      0x100850C9C, None,        "a00800b7"),  # TBNZ X0,#0x20（84EE7C 内 arghena 门；目标 0x84F05C）
+    ("jacket_cell",      0x1008ECD38, None,        "480100b7"),  # TBNZ X8,#0x20（选曲 cell；目标 0x8EAFDC）
+    ("jacket_info",      0x10094C680, None,        "000100b7"),  # TBNZ X0,#0x20（曲目信息面板；目标 0x94A59C）
+    ("jacket_panel",     0x100B41A18, None,        "980100b6"),  # TBZ  X24,#0x20（详情面板；目标 0xB3F2A4=跳过锁绘）
     # ---- 弧/绘制观测桩（只观测不改行为；handler 见 XRCHook.m"弧/绘制 观测桩"）----
     # 三处都是函数入口，首指令均为 SUB SP,SP,#N（非 PC 相对 ⇒ 可重放）。
     # ⚠ 这三条打在**入口 +4**：入口的 `SUB SP,SP,#N` 照常执行 ⇒ SP 自然正确；
     #   被换成 BRK 的是一条 `STP Dn,Dm,[SP,#..]`（保存 callee 浮点，无副作用）。
     #   `B` 够不到 0x101468xxx（271MB）⇒ replay=0，handler 只把 PC 设到 site+4。
-    ("rpf_draw",    0x100B23668, 0, "eb2b056d"),  # 绘制趟 入口+4（STP D11,D10）X0=track X1=音符表
-    ("rpf_arctick", 0x100AFFC14, 0, "ed33016d"),  # 弧 tick 入口+4（STP D13,D12）X0=弧渲染对象
-    ("rpf_arcpass", 0x100AFFA94, 0, "eb2b026d"),  # 头过线 入口+4（STP D11,D10）X0=弧渲染对象
+    ("rpf_draw",    0x100B25E0C, 0, "eb2b056d"),  # 绘制趟 入口+4（STP D11,D10）X0=track X1=音符表
+    ("rpf_arctick", 0x100B0233C, 0, "ed33016d"),  # 弧 tick 入口+4（STP D13,D12）X0=弧渲染对象
+    ("rpf_arcpass", 0x100B021BC, 0, "eb2b026d"),  # 头过线 入口+4（STP D11,D10）X0=弧渲染对象
     # ---- 弧分段「藏」的两处（仅在回跳窗口内把「藏」反成「显」）----
     # 症状：弧带下端被整齐切掉 = **弧的开头**不显示，起手点不可见。
     # 反汇编：两处唯一的藏动作都是 `MOV W1,#0` + `setVisible(child, 0)`（slot 42，vtable+0x150）：
@@ -172,8 +161,8 @@ BRK_HOOKS = [
     # 打桩打在 **MOV W1,#0** 这条上：handler 平时一个字都不改（=与未打桩逐字节同行为），
     # 仅在「回跳后尚未涨回旧水位」的窗口里把 W1 改成 1 ⇒ 引擎自己把分段显回来。
     # 正常游玩不受影响（只在 seek 回发生时生效）。
-    ("arc_hide_a", 0x100AFFB60, 0, "01008052"),   # MOV W1,#0（头过线里的藏）
-    ("arc_hide_b", 0x100AFFE80, 0, "01008052"),   # MOV W1,#0（弧 tick 里的藏）
+    ("arc_hide_a", 0x100B02288, 0, "01008052"),   # MOV W1,#0（头过线里的藏）
+    ("arc_hide_b", 0x100B025A8, 0, "01008052"),   # MOV W1,#0（弧 tick 里的藏）
 ]
 
 # ---- 还原站点：不在 BRK_HOOKS、但既有二进制可能带其桩的站点 ----
@@ -181,7 +170,7 @@ BRK_HOOKS = [
 # 必须单列：遗漏即**还原不掉**，而 dylib 无该站点的处理器 ⇒ 命中 BRK 时 SIGTRAP **直接闪退**。
 # 原字节取自原始二进制（samples/.../stage1/Arc-mobile，md5 49fbbba8…）。新增还原项时照此补。
 RESTORE_SITES = [
-    ("cb_verify", 0x100F43FFC, "fc6fbaa9"),   # STP X28,X27,[SP,#-0x60]!（cb 校验入口序言）
+    ("cb_verify", 0x100F4715C, "fc6fbaa9"),   # STP X28,X27,[SP,#-0x60]!（cb 校验入口序言）
 ]
 
 # ---- 功能集（**构建期开关**）----
@@ -258,10 +247,10 @@ def sites_for(feat_names):
 # (名称, VA, 原字节 hex, 补丁字节 hex) —— 幂等：已是补丁字节跳过；expect 不符即报错。
 GATE_PATCHES = []
 # 静态偏移（VA - image base 0x100000000）
-GP_VTABLE_OFF   = 0x151D8C0   # GameScene vtable
-GP_UPDATE_OFF   = 0xCA7160    # 槽 103 每帧函数
-MTP_VTABLE_OFF  = 0x14B75B0   # MTP vtable
-MTP_GETPOS_OFF  = 0x8E24F0    # 槽 7
+GP_VTABLE_OFF   = 0x1521DC0   # GameScene vtable
+GP_UPDATE_OFF   = 0xCAA7C0    # 槽 103 每帧函数
+MTP_VTABLE_OFF  = 0x14BB930   # MTP vtable
+MTP_GETPOS_OFF  = 0x8E4274    # 槽 7
 
 
 def encode_adrp_add_br(pc_addr: int, dst: int, reg: int = 16) -> bytes:
@@ -337,7 +326,7 @@ def build_info_blob() -> bytes:
 
 
 def patch_judge_stub(data: bytearray) -> list[str]:
-    logs = []
+    logs = ensure_xrc_segment(data)
     base = fat_arm64_slice_offset(bytes(data))
     entry_file = base + STUB_ENTRY_FILE
     cur = bytes(data[entry_file:entry_file + 12])
@@ -356,7 +345,7 @@ def patch_judge_stub(data: bytearray) -> list[str]:
     data[tramp_file:tramp_file + len(tramp)] = tramp
     logs.append(f"trampoline ({len(tramp)}B) @ fileoff {tramp_file:#x} (vm {STUB_TRAMP_VA:#x})")
 
-    # slot: 24B {handler=0, orig=STUB_ENTRY_VA, reserved=0}
+    # slot: 24B in dedicated __XRC RW mapping (never in Swift/BSS zeros)
     slot_file = base + STUB_SLOT_FILE
     if bytes(data[slot_file:slot_file + 24]) != b"\0" * 24:
         raise RuntimeError(f"slot region not zero @ {slot_file:#x}")
@@ -752,58 +741,233 @@ def find_dylibs() -> list[str]:
     return found
 
 
-def check_binary(path: str) -> int:
-    """--check：报告任意 Arc-mobile 的桩/注入状态（签名前后都可自查）。"""
-    raw = bytearray(open(path, "rb").read())
+XRC_SEGMENT_VA = 0x1016A8000
+XRC_SEGMENT_FILE = 0x1650000
+XRC_SEGMENT_SIZE = 0x4000
+
+
+def _check_dyld_segments(blob, bind):
+    """Existing fixups must not refer to LINKEDIT, whose segment index changes."""
+    p = 0
+    def leb():
+        nonlocal p
+        while True:
+            if p >= len(blob):
+                raise RuntimeError("truncated dyld opcode stream")
+            v = blob[p]; p += 1
+            if not v & 0x80:
+                return
+    while p < len(blob):
+        byte = blob[p]; p += 1
+        op, imm = byte & 0xF0, byte & 15
+        if op == (0x70 if bind else 0x20):
+            if imm >= 3:
+                raise RuntimeError("unexpected LINKEDIT segment reference in fixups")
+            leb()
+        elif bind:
+            if op in (0, 0x10, 0x30, 0x50, 0x90, 0xB0):
+                pass
+            elif op == 0x40:
+                q = blob.find(b"\0", p)
+                if q < 0: raise RuntimeError("unterminated bind symbol")
+                p = q + 1
+            elif op in (0x20, 0x60, 0x80, 0xA0): leb()
+            elif op == 0xC0: leb(); leb()
+            else: raise RuntimeError(f"unsupported bind opcode {op:#x}")
+        else:
+            if op in (0, 0x10, 0x40, 0x50): pass
+            elif op in (0x30, 0x60, 0x70): leb()
+            elif op == 0x80: leb(); leb()
+            else: raise RuntimeError(f"unsupported rebase opcode {op:#x}")
+
+
+def ensure_xrc_segment(data):
+    """Reserve a real RW mapping, preserving every existing DATA/BSS section.
+
+    Only this UUID's thin arm64 layout is supported. Insert 16 KiB immediately
+    before LINKEDIT, then relocate all known LINKEDIT file-offset commands.
+    The code signature is necessarily invalidated; the app must be re-signed.
+    """
+    base = validate_target(data)
+    if base or data[:4] != b"\xcf\xfa\xed\xfe":
+        raise RuntimeError("segment allocation requires thin arm64 Mach-O")
+    n, size, commands = parse_load_commands(data, 0)
+    link = None
+    for cmd, cs, pos in commands:
+        if cmd == 0x19:
+            name = bytes(data[pos + 8:pos + 24]).rstrip(b"\0")
+            if name == b"__XRC":
+                vals = struct.unpack_from("<QQQQiiII", data, pos + 24)
+                if vals != (XRC_SEGMENT_VA, XRC_SEGMENT_SIZE, XRC_SEGMENT_FILE, XRC_SEGMENT_SIZE, 3, 3, 0, 0):
+                    raise RuntimeError("unexpected __XRC layout")
+                return ["__XRC RW segment already present"]
+            if name == b"__LINKEDIT": link = pos
+    if link is None: raise RuntimeError("missing LINKEDIT")
+    vm, vs, off, fs = struct.unpack_from("<QQQQ", data, link + 24)
+    if (vm, off) != (XRC_SEGMENT_VA, XRC_SEGMENT_FILE):
+        raise RuntimeError("unexpected LINKEDIT layout")
+    if off + fs != len(data): raise RuntimeError("unexpected trailing data")
+    if padding_after_lc(data, 0, size) < 72:
+        raise RuntimeError("insufficient load-command padding for __XRC")
+    # Reject unhandled offset-bearing commands instead of guessing.
+    simple = {0x19, 0x2, 0xB, 0xE, 0x1B, 0x32, 0x2A, 0x80000028,
+              0x2C, 0xC, 0x8000000C, 0x80000018, 0x8000001C,
+              0x22, 0x80000022, 0x26, 0x29, 0x1D}
+    for cmd, cs, pos in commands:
+        if cmd not in simple: raise RuntimeError(f"unhandled load command {cmd:#x}")
+        if cmd in (0x22, 0x80000022):
+            for k in range(4):
+                do, dn = struct.unpack_from("<II", data, pos + 8 + k * 8)
+                if dn: _check_dyld_segments(bytes(data[do:do + dn]), k != 0)
+    work = bytearray(data)
+    def bump(pos):
+        v, = struct.unpack_from("<I", work, pos)
+        if v:
+            if v < off: raise RuntimeError("unexpected non-LINKEDIT metadata offset")
+            struct.pack_into("<I", work, pos, v + XRC_SEGMENT_SIZE)
+    for cmd, cs, pos in commands:
+        if cmd in (0x22, 0x80000022):
+            for k in range(5): bump(pos + 8 + 8 * k)
+        elif cmd == 0x2:
+            bump(pos + 8); bump(pos + 16)
+        elif cmd == 0xB:
+            for delta in (32, 40, 48, 56, 64, 72): bump(pos + delta)
+        elif cmd in (0x26, 0x29, 0x1D): bump(pos + 8)
+    struct.pack_into("<Q", work, link + 24, vm + XRC_SEGMENT_SIZE)
+    struct.pack_into("<Q", work, link + 40, off + XRC_SEGMENT_SIZE)
+    newcmd = struct.pack("<II16sQQQQiiII", 0x19, 72, b"__XRC",
+                         XRC_SEGMENT_VA, XRC_SEGMENT_SIZE, XRC_SEGMENT_FILE,
+                         XRC_SEGMENT_SIZE, 3, 3, 0, 0)
+    tail = bytes(work[link:32 + size])
+    work[link:32 + size + 72] = newcmd + tail
+    struct.pack_into("<II", work, 16, n + 1, size + 72)
+    work[off:off] = b"\0" * XRC_SEGMENT_SIZE
+    data[:] = work
+    return ["allocated __XRC RW segment; LINKEDIT shifted by 0x4000; re-sign required"]
+
+
+TARGET_UUID = bytes.fromhex("ffa7ad7bfefe3e87bf280f99d6701fd9")
+TARGET_PROFILE_MARKER = b"xrc-profile-7.0.256-ffa7ad7b-static-v1"
+
+
+def validate_target(raw):
+    """Reject a different build before inspecting or modifying fixed offsets."""
     base = fat_arm64_slice_offset(raw)
+    if len(raw) < base + 32 or raw[base:base + 4] != b"\xcf\xfa\xed\xfe":
+        raise RuntimeError("not a supported 64-bit Mach-O")
+    cpu, = struct.unpack_from("<I", raw, base + 4)
+    if cpu != 0x0100000C:
+        raise RuntimeError("not an arm64 image")
+    ncmds, sizeofcmds = struct.unpack_from("<II", raw, base + 16)
+    pos, end = base + 32, base + 32 + sizeofcmds
+    if end > len(raw):
+        raise RuntimeError("truncated load commands")
+    uuid = None
+    for _ in range(ncmds):
+        if pos + 8 > end:
+            raise RuntimeError("truncated load command")
+        cmd, size = struct.unpack_from("<II", raw, pos)
+        if size < 8 or pos + size > end:
+            raise RuntimeError("invalid load command size")
+        if cmd == 0x1B:
+            if size != 24:
+                raise RuntimeError("invalid UUID command")
+            uuid = bytes(raw[pos + 8:pos + 24])
+        if cmd in (0x21, 0x2C):
+            if size < 20 or struct.unpack_from("<I", raw, pos + 16)[0]:
+                raise RuntimeError("encrypted or malformed image")
+        pos += size
+    if uuid != TARGET_UUID:
+        raise RuntimeError("wrong build: expected 7.0.256 / 1209864 UUID " + TARGET_UUID.hex())
+    if len(raw) < base + STUB_INFO_FILE + len(build_info_blob()):
+        raise RuntimeError("truncated target image")
+    return base
+
+
+def judge_state(raw, base):
     entry = bytes(raw[base + STUB_ENTRY_FILE:base + STUB_ENTRY_FILE + 12])
-    tramp = struct.unpack_from("<10I", raw, base + STUB_TRAMP_FILE)
-    has_dylib = has_load_dylib(raw, base, INJECT_NAME)
-    has_stub = entry[:4] != STUB_ENTRY_EXPECT[:4]
-    stub_v2 = tramp[4] == 0xAA0603E3
-    slot = struct.unpack_from("<QQQ", raw, base + STUB_SLOT_FILE) if has_stub else None
-    ok = True
+    if entry == STUB_ENTRY_EXPECT:
+        return "original"
+    if entry == encode_adrp_add_br(STUB_ENTRY_VA, STUB_TRAMP_VA):
+        tr = bytes(raw[base + STUB_TRAMP_FILE:base + STUB_TRAMP_FILE + 40])
+        return "v2" if tr == build_trampoline() else "invalid-trampoline"
+    return "unknown"
+
+
+def validate_sites(raw, base):
+    state = judge_state(raw, base)
+    if state not in ("original", "v2"):
+        raise RuntimeError("judge entry/trampoline is " + state)
+    for name, va, _replay, expected in BRK_HOOKS:
+        off = base + va - 0x100000000
+        cur = bytes(raw[off:off + 4])
+        if cur not in (bytes.fromhex(expected), BRK_INSN):
+            raise RuntimeError(f"unexpected bytes at {name}: {cur.hex()}")
+    for name, va, expected in RESTORE_SITES:
+        off = base + va - 0x100000000
+        if bytes(raw[off:off + 4]) not in (bytes.fromhex(expected), BRK_INSN):
+            raise RuntimeError(f"unexpected restore site: {name}")
+
+
+def check_binary(path: str) -> int:
+    """Read-only, build-aware check; unknown bytes never mean patched."""
+    raw = bytearray(open(path, "rb").read())
     print(f"file       : {path}")
-    print(f"entry      : {'PATCHED (ADRP/ADD/BR)' if has_stub else 'original (STP ...)'}")
-    print(f"trampoline : {'v2 (MOV X3,X6 present)' if stub_v2 else 'v1 or absent'}")
-    print(f"slot       : {slot if slot else '-'}")
-    for name, site_va, replay_va, _expect in BRK_HOOKS:
-        sf = base + (site_va - 0x100000000)
-        insn = struct.unpack_from("<I", raw, sf)[0]
-        if replay_va:
-            rf = base + (replay_va - 0x100000000)
-            tramp_b = raw[rf:rf + 8]
-            print(f"brk[{name}]: site {insn:#010x} "
-                  f"{'PATCHED' if insn == 0xD4200000 else 'original'}; "
-                  f"replay {tramp_b.hex() if any(tramp_b) else 'empty'}")
+    try:
+        base = validate_target(raw)
+        validate_sites(raw, base)
+    except (RuntimeError, ValueError, struct.error) as e:
+        print(f"=> INCOMPATIBLE/UNKNOWN: {e}")
+        return 2
+    state = judge_state(raw, base)
+    has_dylib = has_load_dylib(raw, base, INJECT_NAME)
+    print("build      : 7.0.256 / 1209864 (UUID matched)")
+    print(f"entry      : {state}")
+    ok = True
+    n_brk = 0
+    for name, va, replay, expected in BRK_HOOKS:
+        off = base + va - 0x100000000
+        patched = bytes(raw[off:off + 4]) == BRK_INSN
+        n_brk += int(patched)
+        detail = "original"
+        if patched:
+            detail = "PATCHED"
+            if replay:
+                roff = base + replay - 0x100000000
+                want = bytes.fromhex(expected) + struct.pack("<I", encode_b(replay + 4, va + 4))
+                if bytes(raw[roff:roff + 8]) != want:
+                    detail += " INVALID replay"
+                    ok = False
+        print(f"brk[{name}]: {va:#x} {detail}")
+    if state == "v2":
+        segments = [bytes(raw[p + 8:p + 24]).rstrip(b"\0") for c, n, p in parse_load_commands(raw, base)[2] if c == 0x19]
+        if b"__XRC" not in segments:
+            print("=> INVALID: missing __XRC segment")
+            ok = False
         else:
-            print(f"brk[{name}]: site {insn:#010x} "
-                  f"{'PATCHED' if insn == 0xD4200000 else 'original'}; no-replay")
-    print(f"dylib LC   : {'@rpath/libxrcdemo.dylib present' if has_dylib else 'MISSING'}")
-    gate_ok = 0
-    for name, va, expect, patch in GATE_PATCHES:
-        gf = base + (va - 0x100000000)
-        want = bytes.fromhex(patch)
-        cur = bytes(raw[gf:gf + len(want)])
-        if cur == want:
-            gate_ok += 1
-            state = "PATCHED"
-        elif cur.hex() == expect:
-            state = "original"
-        else:
-            state = f"UNKNOWN({cur.hex()})"
-        print(f"gate[{name}]: {va:#x} {state}")
-    print(f"gates      : {gate_ok}/{len(GATE_PATCHES)} patched")
-    if has_stub and not has_dylib:
-        print("=> INVALID: stub without dylib (features would be dead)")
+            try:
+                ensure_xrc_segment(bytearray(raw))
+            except RuntimeError as e:
+                print(f"=> INVALID storage: {e}")
+                ok = False
+        so = base + STUB_SLOT_FILE
+        slot = struct.unpack_from("<QQQ", raw, so)
+        if slot != (0, STUB_ENTRY_VA, 0):
+            print(f"=> INVALID on-disk slot: {slot}")
+            ok = False
+        io = base + STUB_INFO_FILE
+        if bytes(raw[io:io + len(build_info_blob())]) != build_info_blob():
+            print("=> INVALID info blob")
+            ok = False
+    print(f"dylib LC   : {'present' if has_dylib else 'missing'}")
+    print(f"brk sites  : {n_brk}/{len(BRK_HOOKS)} patched")
+    if (state == "v2" or n_brk) and not has_dylib:
+        print("=> INVALID: patched code without dylib load command")
         ok = False
-    if has_stub and not stub_v2:
-        print("=> v1 trampoline (missing MOV X3,X6) — 判定链接管需要 v2；请重新打桩")
-        ok = False
-    if has_stub and stub_v2 and has_dylib:
-        print("=> OK: stub v2 + dylib — judge feature should report live on device")
-    if not has_stub:
-        print("=> NOT PATCHED: this main carries no stub (judge feature unavailable)")
+    elif state == "original" and not n_brk:
+        print("=> NOT PATCHED: original code at all configured sites")
+    elif ok:
+        print("=> STATIC CHECK OK; dylib compatibility and device behavior still require verification")
     return 0 if ok else 2
 
 
@@ -851,6 +1015,14 @@ def main():
         print(f"[!] main not found: {MAIN}")
         sys.exit(1)
 
+    # Validate this exact build before copying libraries or touching Info.plist.
+    try:
+        preflight = bytearray(open(MAIN, "rb").read())
+        validate_sites(preflight, validate_target(preflight))
+    except (RuntimeError, ValueError, struct.error) as e:
+        print(f"[!] incompatible target: {e}")
+        sys.exit(2)
+
     try:
         dylibs = find_dylibs()
     except FileNotFoundError as e:
@@ -890,6 +1062,12 @@ def main():
             print("    through to the default trap handlers. Refusing to mix.")
             sys.exit(3)
 
+    # Old dylibs retain 7.0.255 offsets even when generic feature markers match.
+    paired = [d for d in dylibs if os.path.basename(d) == "libxrcdemo.dylib"]
+    if len(paired) != 1 or TARGET_PROFILE_MARKER not in open(paired[0], "rb").read():
+        print("[!] rebuild libxrcdemo.dylib from this 7.0.256 source; old profile rejected")
+        sys.exit(3)
+
     os.makedirs(FW_DIR, exist_ok=True)
     for d in dylibs:
         dst = os.path.join(FW_DIR, os.path.basename(d))
@@ -917,7 +1095,8 @@ def main():
 
     base = fat_arm64_slice_offset(data)
     try:
-        logs = insert_load_commands_inplace(data, base)
+        logs = ensure_xrc_segment(data)
+        logs += insert_load_commands_inplace(data, base)
         for line in logs:
             print(f"[+] {line}")
     except RuntimeError as e:
@@ -1026,10 +1205,7 @@ def main():
             "size": len(b),
             "sha256": _hashlib.sha256(b).hexdigest(),
         })
-    if cur_entry[:4] != STUB_ENTRY_EXPECT[:4]:
-        stub_state = "v2" if cur_tramp[4] == 0xAA0603E3 else "v1"
-    else:
-        stub_state = "none"
+    stub_state = judge_state(cur, cbase)
     manifest["state"] = {
         "rescanned": _dt.datetime.now().isoformat(timespec="seconds"),
         "judge_stub": stub_state,
@@ -1058,7 +1234,7 @@ def main():
     fbase = fat_arm64_slice_offset(final)
     has_dylib = has_load_dylib(final, fbase, INJECT_NAME)
     # 打桩判据 = 入口首 4 字节已不是原始 STP（被 12 字节 ADRP/ADD/BR 覆盖）
-    has_stub = bytes(final[fbase + STUB_ENTRY_FILE:fbase + STUB_ENTRY_FILE + 4]) != STUB_ENTRY_EXPECT[:4]
+    has_stub = judge_state(final, fbase) == "v2"
     print(f"[i] combination check: dylib={has_dylib} stub={has_stub}")
     if has_stub and not has_dylib:
         print("[!] INVALID COMBINATION: stub patched but LC_LOAD_DYLIB missing —")
