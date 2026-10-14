@@ -117,7 +117,7 @@ jobs:
             build SYMROOT=$PWD/build 2>&1 | tail -30
           DYLIB="$PWD/build/Release-iphoneos/libellekit.dylib"
           test -f "$DYLIB"
-          lipo -verify_arch arm64 arm64e "$DYLIB"
+          lipo "$DYLIB" -verify_arch arm64 arm64e
           cp "$DYLIB" ../out/libellekit.dylib
           install_name_tool -id @rpath/libellekit.dylib ../out/libellekit.dylib
           ldid -S ../out/libellekit.dylib
@@ -132,8 +132,8 @@ jobs:
               raise SystemExit("Build lacks 7.0.256 profile marker; refusing artifact upload")
           print("Verified 7.0.256 profile marker")
           PY
-          lipo -verify_arch arm64 arm64e out/libxrcdemo.dylib
-          lipo -verify_arch arm64 arm64e out/libellekit.dylib
+          lipo out/libxrcdemo.dylib -verify_arch arm64 arm64e
+          lipo out/libellekit.dylib -verify_arch arm64 arm64e
           shasum -a 256 out/libxrcdemo.dylib out/libellekit.dylib > out/SHA256SUMS.txt
 
       - name: Upload dylibs
